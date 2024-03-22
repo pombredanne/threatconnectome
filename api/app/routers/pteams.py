@@ -9,7 +9,7 @@ from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.sql.expression import func, true
 
-from app import models, schemas
+from app import command, models, schemas
 from app.auth import get_current_user
 from app.common import (
     auto_close_by_pteamtags,
@@ -41,14 +41,6 @@ from app.sbom import sbom_json_to_artifact_json_lines
 from app.slack import validate_slack_webhook_url
 
 router = APIRouter(prefix="/pteams", tags=["pteams"])
-
-
-def pteam_tag_ids(db: Session, pteam_id: UUID | str) -> Sequence[str]:
-    return db.scalars(
-        select(models.PTeamTagReference.tag_id.distinct()).where(
-            models.PTeamTagReference.pteam_id == str(pteam_id)
-        )
-    ).all()
 
 
 def _modify_pteam_auth(
@@ -438,7 +430,7 @@ def get_pteam_topics(
     assert pteam
     check_pteam_membership(db, pteam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
 
-    tag_ids = pteam_tag_ids(db, pteam_id)
+    tag_ids = command.get_pteam_tag_ids(db, pteam_id)
     if not tag_ids:
         return []
     return get_topics_internal(db, current_user.user_id, tag_ids=tag_ids)
@@ -819,9 +811,6 @@ def apply_group_tags(
         old_versions: Dict[str, Set[str]] = {
             row_.tag_id: set(row_.versions) for row_ in old_version_rows
         }
-
-    pteam.references = [reference for reference in pteam.references if not(reference.pteam_id == pteam.pteam_id and reference.group == group)]
-
 
     db.execute(
         delete(models.PTeamTagReference).where(
