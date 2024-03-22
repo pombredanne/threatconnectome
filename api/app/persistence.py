@@ -1,3 +1,4 @@
+from typing import Sequence
 from uuid import UUID
 
 from sqlalchemy import select
@@ -63,6 +64,10 @@ def get_all_ateams(db: Session) -> list[models.ATeam]:
 
 
 ### PTeam
+
+
+def get_all_pteams(db: Session) -> Sequence[models.PTeam]:
+    return db.scalars(select(models.PTeam)).all()
 
 
 def get_pteam_by_id(db: Session, pteam_id: UUID | str) -> models.PTeam | None:

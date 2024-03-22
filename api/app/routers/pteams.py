@@ -60,7 +60,7 @@ def get_pteams(
     """
     Get all pteams list.
     """
-    return db.query(models.PTeam).all()
+    return persistence.get_all_pteams(db)
 
 
 @router.get("/auth_info", response_model=schemas.PTeamAuthInfo)
