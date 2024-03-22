@@ -1,7 +1,8 @@
+from datetime import datetime
 from typing import Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.orm import Session
 
 from app import models
@@ -81,6 +82,32 @@ def create_pteam(db: Session, pteam: models.PTeam) -> models.PTeam:
     db.flush()
     db.refresh(pteam)
     return pteam
+
+
+def get_pteam_invitation_by_id(
+    db: Session,
+    invitation_id: UUID | str,
+) -> models.PTeamInvitation | None:
+    return db.scalars(
+        select(models.PTeamInvitation).where(
+            models.PTeamInvitation.invitation_id == str(invitation_id)
+        )
+    ).one_or_none()
+
+
+def expire_pteam_invitations(db: Session) -> None:
+    db.execute(
+        delete(models.PTeamInvitation).where(
+            or_(
+                models.PTeamInvitation.expiration < datetime.now(),
+                and_(
+                    models.PTeamInvitation.limit_count.is_not(None),
+                    models.PTeamInvitation.limit_count <= models.PTeamInvitation.used_count,
+                ),
+            ),
+        )
+    )
+    db.flush()
 
 
 ### PTeamAuthority # TODO: should obsolete direct access?

@@ -91,54 +91,32 @@ def apply_invitation(
     """
     Apply invitation to pteam.
     """
-    _expire_tokens(db)
+    persistence.expire_pteam_invitations(db)
 
-    invitation = (
-        db.query(models.PTeamInvitation)
-        .filter(
-            models.PTeamInvitation.invitation_id == str(request.invitation_id),
-            or_(
-                models.PTeamInvitation.limit_count.is_(None),
-                models.PTeamInvitation.limit_count > models.PTeamInvitation.used_count,
-            ),
-        )
-        .with_for_update()
-        .one_or_none()
-    )  # lock and block!
-    if invitation is None:
+    if not (invitation := persistence.get_pteam_invitation_by_id(db, request.invitation_id)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid (or expired) invitation id"
         )
-    pteam = db.query(models.PTeam).filter(models.PTeam.pteam_id == invitation.pteam_id).one()
-    if current_user in pteam.members:
+    if current_user in invitation.pteam.members:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Already joined to the pteam"
         )
+    invitation.pteam.members.append(current_user)
 
-    pteam_auth = (
-        db.query(models.PTeamAuthority)
-        .filter(
-            models.PTeamAuthority.pteam_id == invitation.pteam_id,
-            models.PTeamAuthority.user_id == current_user.user_id,
-        )
-        .one_or_none()
-    )
-    if pteam_auth is None:
+    if invitation.authority:  # invitation with authority
+        # Note: non-members never have pteam auth
         pteam_auth = models.PTeamAuthority(
-            pteam_id=invitation.pteam_id, user_id=current_user.user_id, authority=0
+            pteam_id=invitation.pteam_id,
+            user_id=current_user.user_id,
+            authority=invitation.authority,
         )
-    pteam_auth.authority |= invitation.authority
+        persistence.create_pteam_authority(db, pteam_auth)
 
-    pteam.members.append(current_user)
     invitation.used_count += 1
-    db.add(pteam)
-    if pteam_auth.authority > 0:
-        db.add(pteam_auth)
-    db.add(invitation)
-    db.commit()
-    db.refresh(pteam)
 
-    return pteam
+    db.commit()
+
+    return invitation.pteam
 
 
 @router.get("/invitation/{invitation_id}", response_model=schemas.PTeamInviterResponse)
@@ -1166,19 +1144,6 @@ def delete_member(
     return Response(status_code=status.HTTP_204_NO_CONTENT)  # avoid Content-Length Header
 
 
-def _expire_tokens(db: Session):
-    db.query(models.PTeamInvitation).filter(
-        or_(
-            models.PTeamInvitation.expiration < datetime.now(),
-            and_(
-                models.PTeamInvitation.limit_count.is_not(None),
-                models.PTeamInvitation.used_count >= models.PTeamInvitation.limit_count,
-            ),
-        )
-    ).delete()
-    db.commit()
-
-
 @router.post("/{pteam_id}/invitation", response_model=schemas.PTeamInvitationResponse)
 def create_invitation(
     pteam_id: UUID,
@@ -1207,7 +1172,7 @@ def create_invitation(
             detail="Unwise limit_count (give Null for unlimited)",
         )
 
-    _expire_tokens(db)
+    persistence.expire_pteam_invitations(db)
 
     del request.authorities
     token = models.PTeamInvitation(
@@ -1239,7 +1204,7 @@ def list_invitations(
     if not check_pteam_auth(db, pteam, current_user, models.PTeamAuthIntFlag.INVITE):
         raise NOT_HAVE_AUTH
 
-    _expire_tokens(db)
+    persistence.expire_pteam_invitations(db)
 
     return [
         schemas.PTeamInvitationResponse(
@@ -1263,7 +1228,7 @@ def delete_invitation(
     if not check_pteam_auth(db, pteam, current_user, models.PTeamAuthIntFlag.INVITE):
         raise NOT_HAVE_AUTH
 
-    _expire_tokens(db)
+    persistence.expire_pteam_invitations(db)
 
     db.query(models.PTeamInvitation).filter(
         models.PTeamInvitation.invitation_id == str(invitation_id)
