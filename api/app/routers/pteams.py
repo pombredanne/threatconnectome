@@ -164,11 +164,7 @@ def get_pteam_groups(
     if not check_pteam_membership(db, pteam, current_user):
         raise NOT_A_PTEAM_MEMBER
 
-    groups = db.scalars(
-        select(models.PTeamTagReference.group.distinct()).where(
-            models.PTeamTagReference.pteam_id == str(pteam_id),
-        )
-    ).all()
+    groups = persistence.get_pteam_groups(db, pteam_id)
 
     return {"groups": groups}
 

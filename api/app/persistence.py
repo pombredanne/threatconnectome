@@ -84,6 +84,15 @@ def create_pteam(db: Session, pteam: models.PTeam) -> models.PTeam:
     return pteam
 
 
+# TODO: groups(services) should have direct relationship with pteam
+def get_pteam_groups(db: Session, pteam_id: UUID | str) -> Sequence[str]:
+    return db.scalars(
+        select(models.PTeamTagReference.group.distinct()).where(
+            models.PTeamTagReference.pteam_id == str(pteam_id)
+        )
+    ).all()
+
+
 def get_pteam_invitation_by_id(
     db: Session,
     invitation_id: UUID | str,
