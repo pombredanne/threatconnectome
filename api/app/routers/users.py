@@ -33,7 +33,7 @@ def create_user(
     decoded_token = verify_id_token(token)
     uid = decoded_token["uid"]
     email = decoded_token["email"]
-    if db.query(models.Account).filter(models.Account.email == email).first():
+    if persistence.get_account_by_email(db, email):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already used")
     user = persistence.create_account(db, models.Account(uid=uid, email=email, **data.model_dump()))
     db.commit()
@@ -50,7 +50,7 @@ def update_user(
     """
     Update a user.
     """
-    user = db.query(models.Account).filter(models.Account.user_id == str(user_id)).one_or_none()
+    user = persistence.get_account_by_id(db, user_id)
     if not user or user.user_id != current_user.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

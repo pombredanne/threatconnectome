@@ -77,7 +77,7 @@ def verify_id_token(
 def get_current_user(
     decoded_token: Dict[str, Any] = Depends(verify_id_token), db: Session = Depends(get_db)
 ) -> Account:
-    user = persistence.get_account_by_uid(db, decoded_token["uid"])
+    user = persistence.get_account_by_firebase_uid(db, decoded_token["uid"])
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

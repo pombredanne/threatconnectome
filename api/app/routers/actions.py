@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from app import models, schemas
+from app import models, persistence, schemas
 from app.auth import get_current_user
 from app.common import (
     auto_close_by_topic,
@@ -90,7 +90,6 @@ def update_action(
     # Note:
     #   do not try auto close topic because core of action should be immutable
 
-    db.add(action)
     db.commit()
     db.refresh(action)
 
@@ -110,7 +109,7 @@ def delete_action(
     assert action
     topic = action.topic
 
-    db.delete(action)
+    persistence.delete_action(db, action)
     db.commit()
 
     # try auto close because deleted action could block closing

@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import insert as psql_insert
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.sql.expression import false, true
 
-from app import models, schemas
+from app import models, persistence, schemas
 from app.constants import MEMBER_UUID, NOT_MEMBER_UUID, SYSTEM_UUID
 from app.version import (
     PackageFamily,
@@ -599,9 +599,9 @@ def create_action_internal(
         created_by=current_user.user_id,
         created_at=datetime.now(),
     )
-    db.add(row)
+
+    row = persistence.create_action(db, row)
     db.commit()
-    db.refresh(row)
 
     return row
 
@@ -611,11 +611,7 @@ def validate_action(
     action_id: Union[UUID, str],
     on_error: Optional[int] = None,
 ) -> Optional[models.TopicAction]:
-    action = (
-        db.query(models.TopicAction)
-        .filter(models.TopicAction.action_id == str(action_id))
-        .one_or_none()
-    )
+    action = persistence.get_action(db, action_id)
     if action is None and on_error is not None:
         raise HTTPException(status_code=on_error, detail="No such topic action")
     return action
