@@ -240,13 +240,7 @@ def validate_ateam(
     ateam_id: Union[UUID, str],
     on_error: Optional[int] = None,
 ) -> Optional[models.ATeam]:
-    ateam = (
-        db.query(models.ATeam)
-        .filter(
-            models.ATeam.ateam_id == str(ateam_id),
-        )
-        .one_or_none()
-    )
+    ateam = persistence.get_ateam_by_id(db, ateam_id)
     if ateam is None and on_error is not None:
         raise HTTPException(status_code=on_error, detail="No such ateam")
     return ateam

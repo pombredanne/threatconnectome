@@ -8,7 +8,7 @@ from sqlalchemy import and_, nullsfirst, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import true
 
-from app import models, schemas
+from app import models, persistence, schemas
 from app.auth import get_current_user
 from app.common import (
     check_ateam_auth,
@@ -85,7 +85,7 @@ def get_ateams(
     """
     Get all ateam entries.
     """
-    return db.query(models.ATeam).all()
+    return persistence.get_all_ateams(db)
 
 
 @router.post("", response_model=schemas.ATeamInfo)

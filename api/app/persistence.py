@@ -47,3 +47,11 @@ def create_action(db: Session, action: models.TopicAction) -> models.TopicAction
 def delete_action(db: Session, action: models.TopicAction) -> None:
     db.delete(action)
     db.flush()
+
+
+def get_ateam_by_id(db: Session, ateam_id: UUID | str) -> models.ATeam | None:
+    return db.query(models.ATeam).filter(models.ATeam.ateam_id == str(ateam_id)).one_or_none()
+
+
+def get_all_ateams(db: Session) -> list[models.ATeam]:
+    return db.query(models.ATeam).all()
