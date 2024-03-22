@@ -25,6 +25,12 @@ from app.slack import validate_slack_webhook_url
 
 router = APIRouter(prefix="/ateams", tags=["ateams"])
 
+NO_SUCH_PTEAM = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam")
+NOT_HAVE_AUTH = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN,
+    detail="You do not have authority",
+)
+
 
 def _make_ateam_info(ateam: models.ATeam) -> schemas.ATeamInfo:
     return schemas.ATeamInfo(
@@ -227,21 +233,15 @@ def apply_watching_request(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid (or expired) request id"
         )
-    check_pteam_auth(
-        db,
-        data.pteam_id,
-        current_user.user_id,
-        models.PTeamAuthIntFlag.ADMIN,
-        on_error=status.HTTP_403_FORBIDDEN,
-    )
-
-    if str(data.pteam_id) in [pteam.pteam_id for pteam in watching_request.ateam.pteams]:
+    if str(data.pteam_id) in [_pteam.pteam_id for _pteam in watching_request.ateam.pteams]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Already connect to the ateam"
         )
+    if not (pteam := persistence.get_pteam_by_id(db, data.pteam_id)):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid pteam id")
+    if not check_pteam_auth(db, pteam, current_user, models.PTeamAuthIntFlag.ADMIN):
+        raise NOT_HAVE_AUTH
 
-    pteam = validate_pteam(db, str(data.pteam_id), on_error=status.HTTP_400_BAD_REQUEST)
-    assert pteam
     watching_request.ateam.pteams.append(pteam)
 
     watching_request.used_count += 1

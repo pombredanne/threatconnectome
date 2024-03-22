@@ -1,16 +1,21 @@
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models
+
+### Account
 
 
 def get_account_by_firebase_uid(db: Session, uid: str) -> models.Account | None:
     return db.query(models.Account).filter(models.Account.uid == uid).one_or_none()
 
 
-def get_account_by_id(db: Session, user_id: UUID) -> models.Account | None:
-    return db.query(models.Account).filter(models.Account.user_id == str(user_id)).one_or_none()
+def get_account_by_id(db: Session, user_id: UUID | str) -> models.Account | None:
+    return db.scalars(
+        select(models.Account).where(models.Account.user_id == str(user_id))
+    ).one_or_none()
 
 
 def get_account_by_email(db: Session, email: str) -> models.Account | None:
@@ -55,3 +60,42 @@ def get_ateam_by_id(db: Session, ateam_id: UUID | str) -> models.ATeam | None:
 
 def get_all_ateams(db: Session) -> list[models.ATeam]:
     return db.query(models.ATeam).all()
+
+
+### PTeam
+
+
+def get_pteam_by_id(db: Session, pteam_id: UUID | str) -> models.PTeam | None:
+    return db.scalars(
+        select(models.PTeam).where(models.PTeam.pteam_id == str(pteam_id))
+    ).one_or_none()
+
+
+def create_pteam(db: Session, pteam: models.PTeam) -> models.PTeam:
+    db.add(pteam)
+    db.flush()
+    db.refresh(pteam)
+    return pteam
+
+
+### PTeamAuthority # TODO: should obsolete direct access?
+
+
+def get_pteam_authority(
+    db: Session,
+    pteam_id: UUID | str,
+    user_id: UUID | str,
+) -> models.PTeamAuthority | None:
+    return db.scalars(
+        select(models.PTeamAuthority).where(
+            models.PTeamAuthority.pteam_id == str(pteam_id),
+            models.PTeamAuthority.user_id == str(user_id),
+        )
+    ).one_or_none()
+
+
+def create_pteam_authority(db: Session, auth: models.PTeamAuthority) -> models.PTeamAuthority:
+    db.add(auth)
+    db.flush()
+    db.refresh(auth)
+    return auth

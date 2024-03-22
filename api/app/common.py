@@ -166,73 +166,45 @@ def validate_pteam(
 
 def check_pteam_membership(
     db: Session,
-    pteam_id: Union[UUID, str],
-    user_id: Union[UUID, str],
-    on_error: Optional[int] = None,
+    pteam: models.PTeam | None,
+    user: models.Account | None,
     ignore_ateam: bool = False,
 ) -> bool:
-    if str(user_id) == str(SYSTEM_UUID):
+    if not pteam or not user:
+        return False
+    if user.user_id == str(SYSTEM_UUID):
         return True
-    if (
-        not ignore_ateam
-        and db.query(models.ATeamAccount)
-        .filter(
-            models.ATeamAccount.user_id == str(user_id),
-            models.ATeamAccount.ateam_id.in_(
-                db.query(models.ATeamPTeam.ateam_id).filter(
-                    models.ATeamPTeam.pteam_id == str(pteam_id)
-                )
-            ),
-        )
-        .first()
-        is not None
-    ):
+    if user in pteam.members:
         return True
-    row = (
-        db.query(models.PTeamAccount)
-        .filter(
-            models.PTeamAccount.pteam_id == str(pteam_id),
-            models.PTeamAccount.user_id == str(user_id),
-        )
-        .one_or_none()
-    )
-    if row is None and on_error is not None:
-        raise HTTPException(status_code=on_error, detail="Not a pteam member")
-    return row is not None
+    if ignore_ateam:
+        return False
+    for ateam in user.ateams:
+        for pteam_via_ateam in ateam.pteams:
+            if user in pteam_via_ateam.members:
+                return True
+    return False
 
 
 def check_pteam_auth(
     db: Session,
-    pteam_id: Union[UUID, str],
-    user_id: Optional[Union[UUID, str]],
+    pteam: models.PTeam,
+    user: models.Account,
     required: models.PTeamAuthIntFlag,
-    on_error: Optional[int] = None,
 ) -> bool:
-    if user_id and str(user_id) == str(SYSTEM_UUID):
+    if user.user_id == str(SYSTEM_UUID):
         return True
-    str_user_ids = [str(NOT_MEMBER_UUID)]
-    if user_id and (
-        str(user_id) == str(MEMBER_UUID)
-        or check_pteam_membership(db, pteam_id, user_id, ignore_ateam=True)
-    ):
-        str_user_ids += [str(user_id), str(MEMBER_UUID)]  # apply only if member
 
-    rows = (
-        db.query(models.PTeamAuthority.authority)
-        .filter(
-            models.PTeamAuthority.pteam_id == str(pteam_id),
-            models.PTeamAuthority.user_id.in_(str_user_ids),
-        )
-        .all()
-    )
-    auth = 0
-    for row in rows:
-        auth |= row.authority
-    if auth & required == required:  # OK
-        return True
-    if on_error is None:
-        return False
-    raise HTTPException(status_code=on_error, detail="You do not have authority")
+    user_auth = persistence.get_pteam_authority(db, pteam.pteam_id, user.user_id)
+    int_auth = int(user_auth.authority) if user_auth else 0
+    # append auth via pseudo-users
+    if not_member_auth := persistence.get_pteam_authority(db, pteam.pteam_id, NOT_MEMBER_UUID):
+        int_auth |= not_member_auth.authority
+    if user in pteam.members and (
+        member_auth := persistence.get_pteam_authority(db, pteam.pteam_id, MEMBER_UUID)
+    ):
+        int_auth |= member_auth.authority
+
+    return int_auth & required == required
 
 
 def validate_ateam(
@@ -1110,15 +1082,13 @@ def create_actionlog_internal(
 ):
     pteam = validate_pteam(db, data.pteam_id, on_error=status.HTTP_400_BAD_REQUEST)
     assert pteam
-    check_pteam_membership(
-        db, data.pteam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN
-    )
+    check_pteam_membership(db, pteam, current_user)
     user = (
         db.query(models.Account).filter(models.Account.user_id == str(data.user_id)).one_or_none()
     )
     if not user:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
-    check_pteam_membership(db, data.pteam_id, data.user_id, on_error=status.HTTP_400_BAD_REQUEST)
+    check_pteam_membership(db, pteam, user)
     topic = validate_topic(db, data.topic_id, on_error=status.HTTP_400_BAD_REQUEST)
     assert topic
 
@@ -1223,7 +1193,7 @@ def set_pteam_topic_status_internal(
     assert topic
     if not validate_pteamtag(db, pteam_id, tag_id):
         return None
-    check_pteam_membership(db, pteam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
+    check_pteam_membership(db, pteam, current_user)
     if data.topic_status not in {
         models.TopicStatusType.acknowledged,
         models.TopicStatusType.scheduled,
@@ -1240,7 +1210,11 @@ def set_pteam_topic_status_internal(
             on_error=status.HTTP_400_BAD_REQUEST,
         )
     for assignee in data.assignees:
-        check_pteam_membership(db, pteam_id, assignee, on_error=status.HTTP_400_BAD_REQUEST)
+        if not check_pteam_membership(db, pteam, persistence.get_account_by_id(db, assignee)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Not a pteam member",
+            )
 
     current_status = get_current_pteam_topic_tag_status(db, pteam_id, topic_id, tag_id)
     new_status = models.PTeamTopicTagStatus(
