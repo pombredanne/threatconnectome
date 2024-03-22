@@ -186,67 +186,6 @@ def get_pteam_tags(
     return get_pteam_ext_tags(db, pteam_id)
 
 
-def _counts_topic_per_threat_impact(
-    db: Session,
-    pteam_id: Union[UUID, str],
-    tag_id: Union[UUID, str],
-    is_solved: bool,
-) -> Dict[str, int]:
-    threat_counts_rows = (
-        db.query(
-            models.CurrentPTeamTopicTagStatus.threat_impact,
-            func.count(models.CurrentPTeamTopicTagStatus.threat_impact).label("num_rows"),
-        )
-        .filter(
-            models.CurrentPTeamTopicTagStatus.pteam_id == str(pteam_id),
-            models.CurrentPTeamTopicTagStatus.tag_id == str(tag_id),
-            (
-                models.CurrentPTeamTopicTagStatus.topic_status == models.TopicStatusType.completed
-                if is_solved
-                else models.CurrentPTeamTopicTagStatus.topic_status
-                != models.TopicStatusType.completed
-            ),
-        )
-        .group_by(models.CurrentPTeamTopicTagStatus.threat_impact)
-        .all()
-    )
-    return {
-        "1": 0,
-        "2": 0,
-        "3": 0,
-        "4": 0,
-        **{str(row.threat_impact): row.num_rows for row in threat_counts_rows},
-    }
-
-
-def _get_tagged_topic_ids_by_pteam_id_and_status(
-    db: Session,
-    pteam_id: Union[UUID, str],
-    tag_id: Union[UUID, str],
-    is_solved: bool,
-) -> List[UUID]:
-    topic_ids_rows = (
-        db.query(models.CurrentPTeamTopicTagStatus.topic_id)
-        .filter(
-            models.CurrentPTeamTopicTagStatus.pteam_id == str(pteam_id),
-            models.CurrentPTeamTopicTagStatus.tag_id == str(tag_id),
-            (
-                models.CurrentPTeamTopicTagStatus.topic_status == models.TopicStatusType.completed
-                if is_solved
-                else models.CurrentPTeamTopicTagStatus.topic_status
-                != models.TopicStatusType.completed
-            ),
-        )
-        .order_by(
-            models.CurrentPTeamTopicTagStatus.threat_impact,
-            models.CurrentPTeamTopicTagStatus.updated_at.desc(),
-        )
-        .all()
-    )
-
-    return [row.topic_id for row in topic_ids_rows]
-
-
 @router.get("/{pteam_id}/tags/summary", response_model=schemas.PTeamTagsSummary)
 def get_pteam_tags_summary(
     pteam_id: UUID,
@@ -281,22 +220,10 @@ def get_pteam_tagged_solved_topic_ids(
     tag = validate_tag(db, tag_id, on_error=status.HTTP_404_NOT_FOUND)
     assert tag
 
-    requested_ptr = (
-        db.query(
-            models.PTeamTagReference.pteam_id,
-            models.PTeamTagReference.tag_id,
-        )
-        .distinct()
-        .filter(
-            models.PTeamTagReference.pteam_id == str(pteam_id),
-            models.PTeamTagReference.tag_id == str(tag_id),
-        )
-        .one_or_none()
-    )
-    if requested_ptr is None:
+    if not command.is_pteamtag(db, pteam_id, tag_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
-    topic_ids = _get_tagged_topic_ids_by_pteam_id_and_status(db, pteam_id, tag_id, True)
-    threat_impact_count = _counts_topic_per_threat_impact(db, pteam_id, tag_id, True)
+    topic_ids = command.get_topic_ids_by_pteam_id_and_tag_id(db, pteam_id, tag_id, True)
+    threat_impact_count = command.count_pteam_topics_per_threat_impact(db, pteam_id, tag_id, True)
 
     return {
         "pteam_id": pteam_id,
@@ -325,23 +252,11 @@ def get_pteam_tagged_unsolved_topic_ids(
     tag = validate_tag(db, tag_id, on_error=status.HTTP_404_NOT_FOUND)
     assert tag
 
-    requested_ptr = (
-        db.query(
-            models.PTeamTagReference.pteam_id,
-            models.PTeamTagReference.tag_id,
-        )
-        .distinct()
-        .filter(
-            models.PTeamTagReference.pteam_id == str(pteam_id),
-            models.PTeamTagReference.tag_id == str(tag_id),
-        )
-        .one_or_none()
-    )
-    if requested_ptr is None:
+    if not command.is_pteamtag(db, pteam_id, tag_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
 
-    topic_ids = _get_tagged_topic_ids_by_pteam_id_and_status(db, pteam_id, tag_id, False)
-    threat_impact_count = _counts_topic_per_threat_impact(db, pteam_id, tag_id, False)
+    topic_ids = command.get_topic_ids_by_pteam_id_and_tag_id(db, pteam_id, tag_id, False)
+    threat_impact_count = command.count_pteam_topics_per_threat_impact(db, pteam_id, tag_id, False)
 
     return {
         "pteam_id": pteam_id,
