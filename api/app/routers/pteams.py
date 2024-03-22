@@ -120,15 +120,8 @@ def apply_invitation(
 
 
 @router.get("/invitation/{invitation_id}", response_model=schemas.PTeamInviterResponse)
-def invited_pteam(
-    invitation_id: UUID, db: Session = Depends(get_db)
-) -> schemas.PTeamInviterResponse:
-    invitation = (
-        db.query(models.PTeamInvitation)
-        .filter(models.PTeamInvitation.invitation_id == str(invitation_id))
-        .one_or_none()
-    )
-    if invitation is None:
+def invited_pteam(invitation_id: UUID, db: Session = Depends(get_db)):
+    if not (invitation := persistence.get_pteam_invitation_by_id(db, invitation_id)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid invitation id")
 
     invitation_detail = {
@@ -137,7 +130,7 @@ def invited_pteam(
         "email": invitation.inviter.email,
         "user_id": invitation.user_id,
     }
-    return schemas.PTeamInviterResponse(**invitation_detail)
+    return invitation_detail
 
 
 @router.get("/{pteam_id}", response_model=schemas.PTeamInfo)
