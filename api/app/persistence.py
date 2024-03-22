@@ -119,6 +119,15 @@ def expire_pteam_invitations(db: Session) -> None:
     db.flush()
 
 
+def get_pteam_tag_references(
+    db: Session,
+    pteam_id: UUID | str,
+) -> Sequence[models.PTeamTagReference]:
+    return db.scalars(
+        select(models.PTeamTagReference).where(models.PTeamTagReference.pteam_id == str(pteam_id))
+    ).all()
+
+
 ### PTeamAuthority # TODO: should obsolete direct access?
 
 

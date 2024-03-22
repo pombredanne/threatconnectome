@@ -907,11 +907,7 @@ def fix_current_status_by_topic(db: Session, topic: models.Topic):
 
 def get_pteam_ext_tags(db: Session, pteam_id: UUID | str) -> List[schemas.ExtTagResponse]:
     tmp_dict: Dict[Tuple[str, str], schemas.ExtTagResponse] = {}
-    ptrs = db.scalars(
-        select(models.PTeamTagReference)
-        .options(joinedload(models.PTeamTagReference.tag, innerjoin=True))
-        .where(models.PTeamTagReference.pteam_id == str(pteam_id))
-    ).all()
+    ptrs = persistence.get_pteam_tag_references(db, pteam_id)
     for ptr in ptrs:
         key = (ptr.pteam_id, ptr.tag_id)
         tmp = tmp_dict.get(
