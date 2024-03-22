@@ -820,6 +820,9 @@ def apply_group_tags(
             row_.tag_id: set(row_.versions) for row_ in old_version_rows
         }
 
+    pteam.references = [reference for reference in pteam.references if not(reference.pteam_id == pteam.pteam_id and reference.group == group)]
+
+
     db.execute(
         delete(models.PTeamTagReference).where(
             models.PTeamTagReference.pteam_id == pteam.pteam_id,
