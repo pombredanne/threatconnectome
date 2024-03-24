@@ -19,9 +19,7 @@ from app.common import (
     fix_current_status_by_pteam,
     get_current_pteam_topic_tag_status,
     get_or_create_topic_tag,
-    get_pteam_ext_tags,
     get_pteam_topic_status_history,
-    get_pteamtags_summary,
     get_topics_internal,
     pteam_topic_tag_status_to_response,
     pteamtag_try_auto_close_topic,
@@ -183,7 +181,7 @@ def get_pteam_tags(
     if not check_pteam_membership(db, pteam, current_user):
         raise NOT_A_PTEAM_MEMBER
 
-    return get_pteam_ext_tags(db, pteam_id)
+    return command.get_pteam_ext_tags(db, pteam)
 
 
 @router.get("/{pteam_id}/tags/summary", response_model=schemas.PTeamTagsSummary)
@@ -200,7 +198,7 @@ def get_pteam_tags_summary(
     if not check_pteam_membership(db, pteam, current_user):
         raise NOT_A_PTEAM_MEMBER
 
-    return get_pteamtags_summary(db, pteam_id)
+    return command.get_pteamtags_summary(db, pteam)
 
 
 @router.get("/{pteam_id}/tags/{tag_id}/solved_topic_ids", response_model=schemas.PTeamTaggedTopics)
@@ -730,7 +728,7 @@ def apply_group_tags(
     fix_current_status_by_pteam(db, pteam)
 
     db.commit()
-    return get_pteam_ext_tags(db, pteam.pteam_id)
+    return command.get_pteam_ext_tags(db, pteam)
 
 
 @router.delete("/{pteam_id}/tags", status_code=status.HTTP_204_NO_CONTENT)
