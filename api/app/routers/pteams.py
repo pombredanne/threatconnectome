@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Dict, List, Sequence, Set, Union
+from typing import Dict, List, Set
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
@@ -27,11 +27,7 @@ from app.common import (
     validate_actionlog,
     validate_topic,
 )
-from app.constants import (
-    DEFAULT_ALERT_THREAT_IMPACT,
-    MEMBER_UUID,
-    NOT_MEMBER_UUID,
-)
+from app.constants import MEMBER_UUID, NOT_MEMBER_UUID
 from app.database import get_db
 from app.sbom import sbom_json_to_artifact_json_lines
 from app.slack import validate_slack_webhook_url
@@ -300,7 +296,7 @@ def create_pteam(
     pteam = models.PTeam(
         pteam_name=data.pteam_name.strip(),
         contact_info=data.contact_info.strip(),
-        alert_threat_impact=data.alert_threat_impact or DEFAULT_ALERT_THREAT_IMPACT,
+        alert_threat_impact=data.alert_threat_impact,
     )
     pteam.alert_slack = models.PTeamSlack(
         pteam_id=pteam.pteam_id,
@@ -340,22 +336,6 @@ def create_pteam(
     db.commit()
 
     return pteam
-
-
-def _guard_last_admin(db: Session, pteam_id: UUID, excludes: Sequence[Union[str, UUID]]):
-    left_admins = (
-        db.query(models.PTeamAuthority)
-        .filter(
-            models.PTeamAuthority.pteam_id == str(pteam_id),
-            models.PTeamAuthority.user_id.not_in(list(map(str, excludes))),
-            models.PTeamAuthority.authority.op("&")(models.PTeamAuthIntFlag.ADMIN) != 0,
-        )
-        .all()
-    )
-    if len(left_admins) == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Removing last ADMIN is not allowed"
-        )
 
 
 @router.post("/{pteam_id}/authority", response_model=List[schemas.PTeamAuthResponse])
@@ -409,9 +389,11 @@ def update_pteam_auth(
             auth = persistence.create_pteam_authority(db, auth)
         auth.authority = models.PTeamAuthIntFlag.from_enums(request.authorities)
 
-    if len([x for x in requests if "admin" in x.authorities]) == 0:  # no admin in requests
-        db.flush()
-        _guard_last_admin(db, pteam_id, str_ids)
+    db.flush()
+    if command.missing_pteam_admin(db, pteam):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Removing last ADMIN is not allowed"
+        )
 
     db.commit()
 
@@ -1059,7 +1041,6 @@ def delete_member(
     target_users = [x for x in pteam.members if x.user_id == str(user_id)]
     if len(target_users) == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam member")
-    _guard_last_admin(db, pteam_id, [user_id])
 
     # remove all extra authorities  # FIXME: should be deleted on cascade
     db.execute(
@@ -1071,8 +1052,14 @@ def delete_member(
 
     # remove from members
     pteam.members.remove(target_users[0])
-    db.commit()
 
+    db.flush()
+    if command.missing_pteam_admin(db, pteam):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Removing last ADMIN is not allowed"
+        )
+
+    db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)  # avoid Content-Length Header
 
 

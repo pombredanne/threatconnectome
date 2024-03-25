@@ -29,6 +29,18 @@ def is_pteamtag(db: Session, pteam_id: UUID | str, tag_id: UUID | str) -> bool:
     )
 
 
+def missing_pteam_admin(db: Session, pteam: models.PTeam) -> bool:
+    return (
+        db.execute(
+            select(models.PTeamAuthority).where(
+                models.PTeamAuthority.pteam_id == pteam.pteam_id,
+                models.PTeamAuthority.authority.op("&")(models.PTeamAuthIntFlag.ADMIN) != 0,
+            )
+        ).first()
+        is None
+    )
+
+
 def count_pteam_topics_per_threat_impact(
     db: Session,
     pteam_id: UUID | str,
