@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import insert as psql_insert
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import false, true
 
-from app import models, persistence, schemas
+from app import command, models, persistence, schemas
 from app.constants import MEMBER_UUID, NOT_MEMBER_UUID, SYSTEM_UUID
 from app.version import (
     PackageFamily,
@@ -985,54 +985,6 @@ def create_actionlog_internal(
     return log
 
 
-def pteam_topic_tag_status_to_response(
-    db: Session,
-    status_row: models.PTeamTopicTagStatus,
-) -> schemas.TopicStatusResponse:
-    actionlogs = (
-        db.query(models.ActionLog)
-        .filter(
-            func.array_position(status_row.logging_ids, models.ActionLog.logging_id).is_not(None)
-        )
-        .order_by(models.ActionLog.executed_at.desc())
-        .all()
-    )
-    return schemas.TopicStatusResponse(
-        status_id=UUID(status_row.status_id),
-        topic_id=UUID(status_row.topic_id),
-        pteam_id=UUID(status_row.pteam_id),
-        tag_id=UUID(status_row.tag_id),
-        user_id=UUID(status_row.user_id),
-        topic_status=status_row.topic_status,
-        created_at=status_row.created_at,
-        assignees=list(map(UUID, status_row.assignees)),
-        note=status_row.note,
-        scheduled_at=status_row.scheduled_at,
-        action_logs=[schemas.ActionLogResponse(**log.__dict__) for log in actionlogs],
-    )
-
-
-def get_current_pteam_topic_tag_status(
-    db: Session,
-    pteam: models.PTeam,
-    topic_id: Union[UUID, str],
-    tag: models.Tag,
-) -> models.PTeamTopicTagStatus | None:
-    return (
-        db.query(models.PTeamTopicTagStatus)
-        .join(
-            models.CurrentPTeamTopicTagStatus,
-            and_(
-                models.CurrentPTeamTopicTagStatus.pteam_id == pteam.pteam_id,
-                models.CurrentPTeamTopicTagStatus.topic_id == str(topic_id),
-                models.CurrentPTeamTopicTagStatus.tag_id == tag.tag_id,
-                models.CurrentPTeamTopicTagStatus.status_id == models.PTeamTopicTagStatus.status_id,
-            ),
-        )
-        .one_or_none()
-    )
-
-
 def set_pteam_topic_status_internal(
     db: Session,
     user: models.Account,
@@ -1097,7 +1049,7 @@ def set_pteam_topic_status_internal(
 
     db.flush()
 
-    return pteam_topic_tag_status_to_response(db, new_status)
+    return command.pteam_topic_tag_status_to_response(db, new_status)
 
 
 def _pick_actions_related_to_pteamtag_from_topic(

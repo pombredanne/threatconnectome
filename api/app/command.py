@@ -305,6 +305,30 @@ def get_last_updated_at_in_current_pteam_topic_tag_status(
     ).one()
 
 
+def pteam_topic_tag_status_to_response(
+    db: Session,
+    status: models.PTeamTopicTagStatus,
+) -> schemas.TopicStatusResponse:
+    actionlogs = db.scalars(
+        select(models.ActionLog)
+        .where(func.array_position(status.logging_ids, models.ActionLog.logging_id).is_not(None))
+        .order_by(models.ActionLog.executed_at.desc())
+    ).all()
+    return schemas.TopicStatusResponse(
+        status_id=UUID(status.status_id),
+        topic_id=UUID(status.topic_id),
+        pteam_id=UUID(status.pteam_id),
+        tag_id=UUID(status.tag_id),
+        user_id=UUID(status.user_id),
+        topic_status=status.topic_status,
+        created_at=status.created_at,
+        assignees=list(map(UUID, status.assignees)),
+        note=status.note,
+        scheduled_at=status.scheduled_at,
+        action_logs=[schemas.ActionLogResponse(**log.__dict__) for log in actionlogs],
+    )
+
+
 def get_pteam_reference_versions_of_each_tags(
     db: Session,
     pteam_id: UUID | str,

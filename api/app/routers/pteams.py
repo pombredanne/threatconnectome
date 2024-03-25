@@ -14,10 +14,8 @@ from app.common import (
     check_pteam_auth,
     check_pteam_membership,
     fix_current_status_by_pteam,
-    get_current_pteam_topic_tag_status,
     get_or_create_topic_tag,
     get_topics_internal,
-    pteam_topic_tag_status_to_response,
     pteamtag_try_auto_close_topic,
     set_pteam_topic_status_internal,
     validate_actionlog,
@@ -850,14 +848,16 @@ def get_pteam_topic_status(
     if tag not in {ref.tag for ref in pteam.references}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
 
-    current_row = get_current_pteam_topic_tag_status(db, pteam, topic_id, tag)
+    current_row = persistence.get_current_pteam_topic_tag_status(db, pteam_id, topic_id, tag_id)
     if current_row is None or current_row.status_id is None:
         return {
             "pteam_id": pteam_id,
             "topic_id": topic_id,
             "tag_id": tag_id,
         }
-    return pteam_topic_tag_status_to_response(db, current_row)
+    status_row = persistence.get_pteam_topic_tag_status_by_id(db, current_row.status_id)
+    assert status_row
+    return command.pteam_topic_tag_status_to_response(db, status_row)
 
 
 @router.get("/{pteam_id}/members", response_model=list[schemas.UserResponse])
