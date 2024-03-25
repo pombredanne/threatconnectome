@@ -16,7 +16,6 @@ from app.common import (
     fix_current_status_by_pteam,
     get_current_pteam_topic_tag_status,
     get_or_create_topic_tag,
-    get_pteam_topic_status_history,
     get_topics_internal,
     pteam_topic_tag_status_to_response,
     pteamtag_try_auto_close_topic,
@@ -763,22 +762,6 @@ def get_pteam_topic_statuses_summary(
     if tag not in {ref.tag for ref in pteam.references}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
     return command.get_pteam_topic_statuses_summary(db, pteam, tag)
-
-
-@router.get("/{pteam_id}/topicstatus", response_model=list[schemas.TopicStatusResponse])
-def get_pteam_topic_status_list(
-    pteam_id: UUID,
-    current_user: models.Account = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Get topic status list of the pteam.
-    """
-    if not (pteam := persistence.get_pteam_by_id(db, pteam_id)) or pteam.disabled:
-        raise NO_SUCH_PTEAM
-    if not check_pteam_membership(db, pteam, current_user):
-        raise NOT_A_PTEAM_MEMBER
-    return get_pteam_topic_status_history(db, pteam_id=pteam_id)
 
 
 @router.post(
