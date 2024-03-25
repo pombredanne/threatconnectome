@@ -357,6 +357,19 @@ def get_pteam_tag_references_by_tag_id(
     ).all()
 
 
+def get_pteam_tag_references_by_group(
+    db: Session,
+    pteam_id: UUID | str,
+    group: str,
+) -> Sequence[models.PTeamTagReference]:
+    return db.scalars(
+        select(models.PTeamTagReference).where(
+            models.PTeamTagReference.pteam_id == str(pteam_id),
+            models.PTeamTagReference.group == group,
+        )
+    ).all()
+
+
 ### PTeamAuthority # TODO: should obsolete direct access?
 
 
@@ -371,6 +384,12 @@ def get_pteam_authority(
             models.PTeamAuthority.user_id == str(user_id),
         )
     ).one_or_none()
+
+
+def get_pteam_all_authorities(db: Session, pteam_id: UUID | str) -> Sequence[models.PTeamAuthority]:
+    return db.scalars(
+        select(models.PTeamAuthority).where(models.PTeamAuthority.pteam_id == str(pteam_id))
+    ).all()
 
 
 def create_pteam_authority(db: Session, auth: models.PTeamAuthority) -> models.PTeamAuthority:
