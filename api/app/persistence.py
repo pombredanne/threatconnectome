@@ -1,11 +1,13 @@
 from datetime import datetime
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, desc, func, or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.expression import true
 
 from app import models, schemas
+from app.models import ActionType
 
 ### Account
 
@@ -36,12 +38,21 @@ def delete_account(db: Session, account: models.Account) -> None:
     db.flush()
 
 
+### Action
+
+
 def get_action(db: Session, action_id: UUID | str) -> models.TopicAction | None:
     return (
         db.query(models.TopicAction)
         .filter(models.TopicAction.action_id == str(action_id))
         .one_or_none()
     )
+
+
+def get_action_by_user_id(db: Session, user_id: UUID | str) -> models.Account | None:
+    return db.scalars(
+        select(models.Account).where(models.Account.user_id == str(user_id))
+    ).one_or_none()
 
 
 def create_action(db: Session, action: models.TopicAction) -> models.TopicAction:
@@ -54,6 +65,87 @@ def create_action(db: Session, action: models.TopicAction) -> models.TopicAction
 def delete_action(db: Session, action: models.TopicAction) -> None:
     db.delete(action)
     db.flush()
+
+
+### ActionLog
+
+
+def get_action_logs(db: Session, user_id: UUID | str) -> Sequence[models.ActionLog]:
+    return db.scalars(
+        select(models.ActionLog)
+        .where(
+            models.ActionLog.pteam_id.in_(
+                db.scalars(
+                    select(models.PTeamAccount.pteam_id).where(
+                        models.PTeamAccount.user_id == user_id
+                    )
+                )
+            )
+        )
+        .order_by(desc(models.ActionLog.created_at))
+    ).all()
+
+
+def create_action_log(db: Session, action_log: models.ActionLog) -> models.ActionLog:
+    db.add(action_log)
+    db.flush()
+    db.refresh(action_log)
+    return action_log
+
+
+def search_logs(
+    db: Session,
+    topic_ids: Optional[List[UUID]],
+    action_words: Optional[List[str]],
+    action_types: Optional[List[ActionType]],
+    user_ids: Optional[List[UUID]],
+    pteam_ids: Optional[List[UUID]],
+    emails: Optional[List[str]],
+    executed_before: Optional[datetime],
+    executed_after: Optional[datetime],
+    created_before: Optional[datetime],
+    created_after: Optional[datetime],
+) -> List[models.ActionLog]:
+
+    return (
+        db.query(models.ActionLog)
+        .filter(
+            (
+                true()
+                if topic_ids is None
+                else models.ActionLog.topic_id.in_(list(map(str, topic_ids)))
+            ),
+            (
+                true()
+                if action_words is None
+                else models.ActionLog.action.bool_op("@@")(func.to_tsquery("|".join(action_words)))
+            ),
+            true() if action_types is None else models.ActionLog.action_type.in_(action_types),
+            true() if user_ids is None else models.ActionLog.user_id.in_(list(map(str, user_ids))),
+            models.ActionLog.pteam_id.in_(list(map(str, pteam_ids))),
+            true() if emails is None else models.ActionLog.email.in_(emails),
+            true() if executed_before is None else models.ActionLog.executed_at < executed_before,
+            true() if executed_after is None else models.ActionLog.executed_at >= executed_after,
+            true() if created_before is None else models.ActionLog.created_at < created_before,
+            true() if created_after is None else models.ActionLog.created_at >= created_after,
+        )
+        .all()
+    )
+
+
+def get_topic_logs(db: Session, topic_id: UUID, user_id: UUID | str) -> Sequence[models.ActionLog]:
+    return db.scalars(
+        select(models.ActionLog).where(
+            models.ActionLog.topic_id == str(topic_id),
+            models.ActionLog.pteam_id.in_(
+                db.scalars(
+                    select(models.PTeamAccount.pteam_id).where(
+                        models.PTeamAccount.user_id == user_id
+                    )
+                )
+            ),
+        )
+    ).all()
 
 
 ### ATeam
@@ -206,6 +298,15 @@ def expire_pteam_invitations(db: Session) -> None:
     db.flush()
 
 
+def get_pteam_tag_references(
+    db: Session,
+    pteam_id: UUID | str,
+) -> Sequence[models.PTeamTagReference]:
+    return db.scalars(
+        select(models.PTeamTagReference).where(models.PTeamTagReference.pteam_id == str(pteam_id))
+    ).all()
+
+
 def create_pteam_tag_reference(
     db: Session,
     ptr: models.PTeamTagReference,
@@ -221,15 +322,6 @@ def delete_pteam_tag_reference(db: Session, ptr: models.PTeamTagReference):
     db.flush()
 
 
-def get_pteam_tag_references(
-    db: Session,
-    pteam_id: UUID | str,
-) -> Sequence[models.PTeamTagReference]:
-    return db.scalars(
-        select(models.PTeamTagReference).where(models.PTeamTagReference.pteam_id == str(pteam_id))
-    ).all()
-
-
 def get_pteam_tag_references_by_tag_id(
     db: Session,
     pteam_id: UUID | str,
@@ -239,19 +331,6 @@ def get_pteam_tag_references_by_tag_id(
         select(models.PTeamTagReference).where(
             models.PTeamTagReference.pteam_id == str(pteam_id),
             models.PTeamTagReference.tag_id == str(tag_id),
-        )
-    ).all()
-
-
-def get_pteam_tag_references_by_group(
-    db: Session,
-    pteam_id: UUID | str,
-    group: str,
-) -> Sequence[models.PTeamTagReference]:
-    return db.scalars(
-        select(models.PTeamTagReference).where(
-            models.PTeamTagReference.pteam_id == str(pteam_id),
-            models.PTeamTagReference.group == group,
         )
     ).all()
 
@@ -270,12 +349,6 @@ def get_pteam_authority(
             models.PTeamAuthority.user_id == str(user_id),
         )
     ).one_or_none()
-
-
-def get_pteam_all_authorities(db: Session, pteam_id: UUID | str) -> Sequence[models.PTeamAuthority]:
-    return db.scalars(
-        select(models.PTeamAuthority).where(models.PTeamAuthority.pteam_id == str(pteam_id))
-    ).all()
 
 
 def create_pteam_authority(db: Session, auth: models.PTeamAuthority) -> models.PTeamAuthority:

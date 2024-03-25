@@ -937,9 +937,7 @@ def create_actionlog_internal(
     pteam = validate_pteam(db, data.pteam_id, on_error=status.HTTP_400_BAD_REQUEST)
     assert pteam
     check_pteam_membership(db, pteam, current_user)
-    user = (
-        db.query(models.Account).filter(models.Account.user_id == str(data.user_id)).one_or_none()
-    )
+    user = persistence.get_action_by_user_id(db, data.user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
     check_pteam_membership(db, pteam, user)
@@ -978,11 +976,10 @@ def create_actionlog_internal(
     result["executed_at"] = data.executed_at or now
     result["created_at"] = now
     log = models.ActionLog(**result)
-    db.add(log)
+    result = persistence.create_action_log(db, log)
     db.commit()
-    db.refresh(log)
 
-    return log
+    return result
 
 
 def set_pteam_topic_status_internal(
