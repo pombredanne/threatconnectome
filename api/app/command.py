@@ -4,7 +4,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.expression import func
+from sqlalchemy.sql.expression import and_, func
 
 from app import models, persistence, schemas
 
@@ -192,3 +192,19 @@ def get_pteamtags_summary(db: Session, pteam: models.PTeam) -> dict:
     }
 
     return summary
+
+
+def check_tag_is_related_to_topic(db: Session, tag: models.Tag, topic: models.Topic) -> bool:
+    row = (
+        db.query(models.Tag, models.TopicTag)
+        .filter(models.Tag.tag_id == tag.tag_id)
+        .outerjoin(
+            models.TopicTag,
+            and_(
+                models.TopicTag.topic_id == topic.topic_id,
+                models.TopicTag.tag_id.in_([models.Tag.tag_id, models.Tag.parent_id]),
+            ),
+        )
+        .first()
+    )
+    return row is not None and row.TopicTag is not None

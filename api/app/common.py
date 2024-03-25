@@ -108,43 +108,6 @@ def check_tags_exist(db: Session, tag_names: List[str]):
         )
 
 
-def check_tag_is_related_to_topic(
-    db: Session,
-    tag_id: Union[UUID, str],
-    topic_id: Union[UUID, str],
-):
-    row = (
-        db.query(models.Tag, models.TopicTag)
-        .filter(
-            models.Tag.tag_id == str(tag_id),
-        )
-        .outerjoin(
-            models.TopicTag,
-            and_(
-                models.TopicTag.topic_id == str(topic_id),
-                models.TopicTag.tag_id.in_([models.Tag.tag_id, models.Tag.parent_id]),
-            ),
-        )
-        .first()
-    )
-    if row is None or row.TopicTag is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tag mismatch")
-
-
-def validate_pteamtag(
-    db: Session,
-    pteam_id: Union[UUID, str],
-    tag_id: Union[UUID, str],
-) -> bool:
-    pteamtag = db.scalars(
-        select(models.PTeamTagReference).where(
-            models.PTeamTagReference.pteam_id == str(pteam_id),
-            models.PTeamTagReference.tag_id == str(tag_id),
-        )
-    ).first()
-    return True if pteamtag else False
-
-
 def validate_pteam(
     db: Session,
     pteam_id: Union[UUID, str],
@@ -1051,18 +1014,18 @@ def pteam_topic_tag_status_to_response(
 
 def get_current_pteam_topic_tag_status(
     db: Session,
-    pteam_id: Union[UUID, str],
+    pteam: models.PTeam,
     topic_id: Union[UUID, str],
-    tag_id: Union[UUID, str],
-) -> Optional[models.PTeamTopicTagStatus]:
+    tag: models.Tag,
+) -> models.PTeamTopicTagStatus | None:
     return (
         db.query(models.PTeamTopicTagStatus)
         .join(
             models.CurrentPTeamTopicTagStatus,
             and_(
-                models.CurrentPTeamTopicTagStatus.pteam_id == str(pteam_id),
+                models.CurrentPTeamTopicTagStatus.pteam_id == pteam.pteam_id,
                 models.CurrentPTeamTopicTagStatus.topic_id == str(topic_id),
-                models.CurrentPTeamTopicTagStatus.tag_id == str(tag_id),
+                models.CurrentPTeamTopicTagStatus.tag_id == tag.tag_id,
                 models.CurrentPTeamTopicTagStatus.status_id == models.PTeamTopicTagStatus.status_id,
             ),
         )
@@ -1071,53 +1034,24 @@ def get_current_pteam_topic_tag_status(
 
 
 def set_pteam_topic_status_internal(
-    pteam_id: Union[UUID, str],
-    topic_id: Union[UUID, str],
-    tag_id: Union[UUID, str],
-    data: schemas.TopicStatusRequest,
-    current_user: models.Account,
     db: Session,
+    user: models.Account,
+    pteam: models.PTeam,
+    topic_id: Union[UUID, str],
+    tag: models.Tag,  # should be PTeamTag, not TopicTag
+    data: schemas.TopicStatusRequest,
 ) -> schemas.TopicStatusResponse | None:
-    pteam = validate_pteam(db, pteam_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert pteam
-    topic = validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert topic
-    if not validate_pteamtag(db, pteam_id, tag_id):
-        return None
-    check_pteam_membership(db, pteam, current_user)
-    if data.topic_status not in {
-        models.TopicStatusType.acknowledged,
-        models.TopicStatusType.scheduled,
-        models.TopicStatusType.completed,
-    }:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Wrong topic status")
-    check_tag_is_related_to_topic(db, tag_id, topic_id)
-    for logging_id_ in data.logging_ids:
-        validate_actionlog(
-            db,
-            logging_id=logging_id_,
-            pteam_id=pteam_id,
-            topic_id=topic_id,
-            on_error=status.HTTP_400_BAD_REQUEST,
-        )
-    for assignee in data.assignees:
-        if not check_pteam_membership(db, pteam, persistence.get_account_by_id(db, assignee)):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Not a pteam member",
-            )
-
-    current_status = get_current_pteam_topic_tag_status(db, pteam_id, topic_id, tag_id)
+    current_status = get_current_pteam_topic_tag_status(db, pteam, topic_id, tag)
     new_status = models.PTeamTopicTagStatus(
-        pteam_id=str(pteam_id),
+        pteam_id=pteam.pteam_id,
         topic_id=str(topic_id),
-        tag_id=str(tag_id),
+        tag_id=tag.tag_id,
         topic_status=data.topic_status,
-        user_id=current_user.user_id,
+        user_id=user.user_id,
         note=data.note,
         logging_ids=list(set(data.logging_ids)),
         assignees=(
-            [current_user.user_id]
+            [user.user_id]
             if (
                 current_status is None
                 and data.assignees == []
@@ -1129,7 +1063,7 @@ def set_pteam_topic_status_internal(
         created_at=datetime.now(),
     )
     db.add(new_status)
-    db.commit()
+    db.flush()
     db.refresh(new_status)
 
     row = db.query(models.CurrentPTeamTopicTagStatus).filter(
@@ -1137,17 +1071,17 @@ def set_pteam_topic_status_internal(
         models.CurrentPTeamTopicTagStatus.topic_id == new_status.topic_id,
         models.CurrentPTeamTopicTagStatus.tag_id == new_status.tag_id,
     ).one_or_none() or models.CurrentPTeamTopicTagStatus(  # be None at auto-closing
-        pteam_id=str(pteam_id),
+        pteam_id=pteam.pteam_id,
         topic_id=str(topic_id),
-        tag_id=str(tag_id),
+        tag_id=tag.tag_id,
         status_id=None,
         threat_impact=None,  # not fixed at this time,
         updated_at=None,  # and should be fixed by calling fix_current_status_by_...
     )
     row.status_id = new_status.status_id
     row.topic_status = new_status.topic_status
-    db.add(row)
-    db.commit()
+    db.add(row)  # insert or update
+    db.flush()
 
     return pteam_topic_tag_status_to_response(db, new_status)
 
@@ -1228,16 +1162,16 @@ def _complete_topic(
         logging_ids.append(action_log.logging_id)
 
     set_pteam_topic_status_internal(
-        pteam.pteam_id,
+        db,
+        system_account,
+        pteam,
         topic_id,
-        tag.tag_id,
+        tag,
         schemas.TopicStatusRequest(
             topic_status=models.TopicStatusType.completed,
             logging_ids=logging_ids,
             note="auto closed by system",
         ),
-        system_account,
-        db,
     )
 
 

@@ -149,3 +149,25 @@ def create_pteam_authority(db: Session, auth: models.PTeamAuthority) -> models.P
     db.flush()
     db.refresh(auth)
     return auth
+
+
+### Artifact Tag
+
+
+def get_all_tags(db: Session) -> Sequence[models.Tag]:
+    return db.scalars(select(models.Tag)).all()
+
+
+def get_tag_by_id(db: Session, tag_id: UUID | str) -> models.Tag | None:
+    return db.scalars(select(models.Tag).where(models.Tag.tag_id == str(tag_id))).one_or_none()
+
+
+def get_tag_by_name(db: Session, tag_name: str) -> models.Tag | None:
+    return db.scalars(select(models.Tag).where(models.Tag.tag_name == tag_name)).one_or_none()
+
+
+def create_tag(db: Session, tag: models.Tag) -> models.Tag:
+    db.add(tag)
+    db.flush()
+    db.refresh(tag)
+    return tag

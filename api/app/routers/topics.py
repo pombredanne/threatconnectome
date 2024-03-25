@@ -456,8 +456,9 @@ def get_pteam_topic_actions(
     Get actions list of the topic for specified pteam.
     """
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
-    validate_pteam(db, pteam_id, on_error=status.HTTP_404_NOT_FOUND)
-    check_pteam_membership(db, pteam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
+    pteam = validate_pteam(db, pteam_id, on_error=status.HTTP_404_NOT_FOUND)
+    if not check_pteam_membership(db, pteam, current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No a pteam member")
 
     actions = db.scalars(
         select(models.TopicAction).where(models.TopicAction.topic_id == str(topic_id))

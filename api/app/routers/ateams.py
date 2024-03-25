@@ -16,7 +16,6 @@ from app.common import (
     check_pteam_auth,
     sortkey2orderby,
     validate_ateam,
-    validate_pteam,
     validate_topic,
 )
 from app.constants import MEMBER_UUID, NOT_MEMBER_UUID, SYSTEM_UUID

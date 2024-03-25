@@ -24,8 +24,7 @@ from app.common import (
     pteam_topic_tag_status_to_response,
     pteamtag_try_auto_close_topic,
     set_pteam_topic_status_internal,
-    validate_pteamtag,
-    validate_tag,
+    validate_actionlog,
     validate_topic,
 )
 from app.constants import (
@@ -40,7 +39,6 @@ from app.slack import validate_slack_webhook_url
 router = APIRouter(prefix="/pteams", tags=["pteams"])
 
 
-NO_SUCH_PTEAM = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam")
 NOT_A_PTEAM_MEMBER = HTTPException(
     status_code=status.HTTP_403_FORBIDDEN,
     detail="Not a pteam member",
@@ -49,6 +47,8 @@ NOT_HAVE_AUTH = HTTPException(
     status_code=status.HTTP_403_FORBIDDEN,
     detail="You do not have authority",
 )
+NO_SUCH_PTEAM = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam")
+NO_SUCH_TAG = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such tag")
 
 
 @router.get("", response_model=List[schemas.PTeamEntry])
@@ -215,11 +215,11 @@ def get_pteam_tagged_solved_topic_ids(
         raise NO_SUCH_PTEAM
     if not check_pteam_membership(db, pteam, current_user):
         raise NOT_A_PTEAM_MEMBER
-    tag = validate_tag(db, tag_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert tag
-
-    if not command.is_pteamtag(db, pteam_id, tag_id):
+    if not (tag := persistence.get_tag_by_id(db, tag_id)):
+        raise NO_SUCH_TAG
+    if tag not in {ref.tag for ref in pteam.references}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
+
     topic_ids = command.get_topic_ids_by_pteam_id_and_tag_id(db, pteam_id, tag_id, True)
     threat_impact_count = command.count_pteam_topics_per_threat_impact(db, pteam_id, tag_id, True)
 
@@ -247,10 +247,9 @@ def get_pteam_tagged_unsolved_topic_ids(
         raise NO_SUCH_PTEAM
     if not check_pteam_membership(db, pteam, current_user):
         raise NOT_A_PTEAM_MEMBER
-    tag = validate_tag(db, tag_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert tag
-
-    if not command.is_pteamtag(db, pteam_id, tag_id):
+    if not (tag := persistence.get_tag_by_id(db, tag_id)):
+        raise NO_SUCH_TAG
+    if tag not in {ref.tag for ref in pteam.references}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
 
     topic_ids = command.get_topic_ids_by_pteam_id_and_tag_id(db, pteam_id, tag_id, False)
@@ -475,8 +474,10 @@ def get_pteamtag(
         raise NO_SUCH_PTEAM
     if not check_pteam_membership(db, pteam, current_user):
         raise NOT_A_PTEAM_MEMBER
-    tag = validate_tag(db, tag_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert tag
+    if not (tag := persistence.get_tag_by_id(db, tag_id)):
+        raise NO_SUCH_TAG
+    if tag not in {ref.tag for ref in pteam.references}:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
 
     ptrs = db.scalars(
         select(models.PTeamTagReference).where(
@@ -484,9 +485,6 @@ def get_pteamtag(
             models.PTeamTagReference.tag_id == str(tag_id),
         )
     ).all()
-    if not ptrs:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
-
     references = [
         {
             "group": ptr.group,
@@ -495,6 +493,7 @@ def get_pteamtag(
         }
         for ptr in ptrs
     ]
+
     last_updated_at = (
         db.query(func.max(models.CurrentPTeamTopicTagStatus.updated_at))
         .filter(
@@ -504,6 +503,7 @@ def get_pteamtag(
         )
         .scalar()
     )
+
     return {
         "pteam_id": pteam_id,
         "tag_id": tag_id,
@@ -834,20 +834,7 @@ def update_pteam(
     return pteam
 
 
-def _get_pteam_topic_statuses_summary(
-    db: Session, pteam: models.PTeam, tag_id: str, on_error: int = status.HTTP_400_BAD_REQUEST
-):
-    if (
-        db.query(models.PTeamTagReference)
-        .filter(
-            models.PTeamTagReference.tag_id == tag_id,
-            models.PTeamTagReference.pteam_id == pteam.pteam_id,
-        )
-        .first()
-        is None
-    ):
-        raise HTTPException(status_code=on_error, detail="No such pteam tag")
-
+def _get_pteam_topic_statuses_summary(db: Session, pteam: models.PTeam, tag: models.Tag) -> dict:
     rows = (
         db.query(
             models.Tag,
@@ -856,7 +843,7 @@ def _get_pteam_topic_statuses_summary(
             models.PTeamTopicTagStatus.topic_status,
         )
         .filter(
-            models.Tag.tag_id == tag_id,
+            models.Tag.tag_id == tag.tag_id,
         )
         .join(
             models.TopicTag, models.TopicTag.tag_id.in_([models.Tag.tag_id, models.Tag.parent_id])
@@ -887,7 +874,7 @@ def _get_pteam_topic_statuses_summary(
     )
 
     return {
-        "tag_id": tag_id,
+        "tag_id": tag.tag_id,
         "topics": [
             {
                 **row.Topic.__dict__,
@@ -915,9 +902,11 @@ def get_pteam_topic_statuses_summary(
         raise NO_SUCH_PTEAM
     if not check_pteam_membership(db, pteam, current_user):
         raise NOT_A_PTEAM_MEMBER
-    return _get_pteam_topic_statuses_summary(
-        db, pteam, str(tag_id), on_error=status.HTTP_404_NOT_FOUND
-    )
+    if not (tag := persistence.get_tag_by_id(db, tag_id)):
+        raise NO_SUCH_TAG
+    if tag not in {ref.tag for ref in pteam.references}:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
+    return _get_pteam_topic_statuses_summary(db, pteam, tag)
 
 
 @router.get("/{pteam_id}/topicstatus", response_model=List[schemas.TopicStatusResponse])
@@ -952,11 +941,47 @@ def set_pteam_topic_status(
     """
     if not (pteam := persistence.get_pteam_by_id(db, pteam_id)) or pteam.disabled:
         raise NO_SUCH_PTEAM
-    if not validate_topic(db, topic_id):
+    if not check_pteam_membership(db, pteam, current_user):
+        raise NOT_A_PTEAM_MEMBER
+
+    # TODO: should check pteam auth: topic_status
+
+    if not (topic := validate_topic(db, topic_id)):  # FIXME: use get_topic_by_id
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such topic")
-    if not validate_pteamtag(db, pteam_id, tag_id):
+    # TODO: should check pteam topic???
+    # TODO: should check topic tag?? -- should care about parent&child
+
+    if not (tag := persistence.get_tag_by_id(db, tag_id)):
+        raise NO_SUCH_TAG
+    if tag not in {ref.tag for ref in pteam.references}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
-    ret = set_pteam_topic_status_internal(pteam_id, topic_id, tag_id, data, current_user, db)
+
+    if not command.check_tag_is_related_to_topic(db, tag, topic):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tag mismatch")
+
+    if data.topic_status not in {
+        models.TopicStatusType.acknowledged,
+        models.TopicStatusType.scheduled,
+        models.TopicStatusType.completed,
+    }:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Wrong topic status")
+
+    for logging_id_ in data.logging_ids:
+        validate_actionlog(
+            db,
+            logging_id=logging_id_,
+            pteam_id=pteam_id,
+            topic_id=topic_id,
+            on_error=status.HTTP_400_BAD_REQUEST,
+        )
+    for assignee in data.assignees:
+        if not check_pteam_membership(db, pteam, persistence.get_account_by_id(db, assignee)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Not a pteam member",
+            )
+
+    ret = set_pteam_topic_status_internal(db, current_user, pteam, topic_id, tag, data)
     assert ret
     return ret
 
@@ -976,14 +1001,19 @@ def get_pteam_topic_status(
     """
     if not (pteam := persistence.get_pteam_by_id(db, pteam_id)) or pteam.disabled:
         raise NO_SUCH_PTEAM
-    topic = validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert topic
-    if not validate_pteamtag(db, pteam_id, tag_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
     if not check_pteam_membership(db, pteam, current_user):
         raise NOT_A_PTEAM_MEMBER
+    topic = validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
+    assert topic
+    # TODO: should check pteam topic???
+    # TODO: should check topic tag?? -- should care about parent&child
 
-    current_row = get_current_pteam_topic_tag_status(db, pteam_id, topic_id, tag_id)
+    if not (tag := persistence.get_tag_by_id(db, tag_id)):
+        raise NO_SUCH_TAG
+    if tag not in {ref.tag for ref in pteam.references}:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
+
+    current_row = get_current_pteam_topic_tag_status(db, pteam, topic_id, tag)
     if current_row is None or current_row.status_id is None:
         return {
             "pteam_id": pteam_id,
@@ -1232,7 +1262,9 @@ def fix_status_mismatch_tag(
         raise NO_SUCH_PTEAM
     if not check_pteam_membership(db, pteam, current_user):
         raise NOT_A_PTEAM_MEMBER
-    if not validate_pteamtag(db, pteam_id, tag_id):
+    if not (tag := persistence.get_tag_by_id(db, tag_id)):
+        raise NO_SUCH_TAG
+    if tag not in {ref.tag for ref in pteam.references}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
 
     select_stmt = (
