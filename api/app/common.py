@@ -170,17 +170,6 @@ def check_pteam_auth(
     return int_auth & required == required
 
 
-def validate_ateam(
-    db: Session,
-    ateam_id: Union[UUID, str],
-    on_error: Optional[int] = None,
-) -> Optional[models.ATeam]:
-    ateam = persistence.get_ateam_by_id(db, ateam_id)
-    if ateam is None and on_error is not None:
-        raise HTTPException(status_code=on_error, detail="No such ateam")
-    return ateam
-
-
 def check_ateam_membership(
     db: Session,
     ateam_id: Union[UUID, str],
