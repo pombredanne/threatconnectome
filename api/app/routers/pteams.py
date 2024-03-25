@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy.sql.expression import func, true
+from sqlalchemy.sql.expression import func
 
 from app import command, models, persistence, schemas
 from app.auth import get_current_user
@@ -423,22 +423,17 @@ def get_pteam_auth(
     """
     if not (pteam := persistence.get_pteam_by_id(db, pteam_id)) or pteam.disabled:
         raise NO_SUCH_PTEAM
-    rows = (
-        db.query(models.PTeamAuthority)
-        .filter(
-            models.PTeamAuthority.pteam_id == str(pteam_id),
-            (
-                true()
-                if check_pteam_membership(db, pteam, current_user)
-                else models.PTeamAuthority.user_id == str(NOT_MEMBER_UUID)
-            ),  # limit if not a member
-        )
-        .all()
-    )
+
+    if current_user in pteam.members:  # member can get all authorities
+        authorities = persistence.get_pteam_all_authorities(db, pteam_id)
+    else:  # not member can get only for NOT_MEMBER_UUID
+        auth_for_not_member = persistence.get_pteam_authority(db, pteam_id, NOT_MEMBER_UUID)
+        authorities = [auth_for_not_member] if auth_for_not_member else []
+
     response = []
-    for row in rows:
-        enums = models.PTeamAuthIntFlag(row.authority).to_enums()
-        response.append({"user_id": row.user_id, "authorities": enums})
+    for auth in authorities:
+        enums = models.PTeamAuthIntFlag(auth.authority).to_enums()
+        response.append({"user_id": auth.user_id, "authorities": enums})
     return response
 
 

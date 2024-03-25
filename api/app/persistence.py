@@ -144,6 +144,12 @@ def get_pteam_authority(
     ).one_or_none()
 
 
+def get_pteam_all_authorities(db: Session, pteam_id: UUID | str) -> Sequence[models.PTeamAuthority]:
+    return db.scalars(
+        select(models.PTeamAuthority).where(models.PTeamAuthority.pteam_id == str(pteam_id))
+    ).all()
+
+
 def create_pteam_authority(db: Session, auth: models.PTeamAuthority) -> models.PTeamAuthority:
     db.add(auth)
     db.flush()
