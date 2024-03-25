@@ -37,6 +37,7 @@ NOT_HAVE_AUTH = HTTPException(
     status_code=status.HTTP_403_FORBIDDEN,
     detail="You do not have authority",
 )
+NO_SUCH_ATEAM = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such ateam")
 NO_SUCH_PTEAM = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam")
 NO_SUCH_TAG = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such tag")
 
@@ -812,7 +813,12 @@ def set_pteam_topic_status(
             on_error=status.HTTP_400_BAD_REQUEST,
         )
     for assignee in data.assignees:
-        if not check_pteam_membership(db, pteam, persistence.get_account_by_id(db, assignee)):
+        if not (a_user := persistence.get_account_by_id(db, assignee)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No such user",
+            )
+        if not check_pteam_membership(db, pteam, a_user):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Not a pteam member",
@@ -1047,10 +1053,11 @@ def remove_watcher_ateam(
         raise NO_SUCH_PTEAM
     if not check_pteam_auth(db, pteam, current_user, models.PTeamAuthIntFlag.ADMIN):
         raise NOT_HAVE_AUTH
-
-    pteam.ateams = [ateams for ateams in pteam.ateams if ateams.ateam_id != str(ateam_id)]
-    db.add(pteam)
-    db.commit()
+    if not (ateam := persistence.get_ateam_by_id(db, ateam_id)):
+        raise NO_SUCH_ATEAM
+    if ateam in pteam.ateams:  # ignore removing not-watcher
+        pteam.ateams.remove(ateam)
+        db.commit()
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
