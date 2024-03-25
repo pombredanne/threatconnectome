@@ -1007,10 +1007,12 @@ def delete_invitation(
 
     persistence.expire_pteam_invitations(db)
 
-    db.query(models.PTeamInvitation).filter(
-        models.PTeamInvitation.invitation_id == str(invitation_id)
-    ).delete()
-    db.commit()
+    invitation = persistence.get_pteam_invitation_by_id(db, invitation_id)
+    if invitation:  # can be expired before deleting
+        persistence.delete_pteam_invitation(db, invitation)
+
+    db.commit()  # commit not only deleted but also expired
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)  # avoid Content-Length Header
 
 
