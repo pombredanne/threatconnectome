@@ -1,11 +1,12 @@
 from datetime import datetime
 from typing import Sequence
 from uuid import UUID
+from typing import List, Optional
 
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import and_, delete, or_, select, func
 from sqlalchemy.orm import Session
 
-from app import models
+from app import models, schemas
 
 ### Account
 
@@ -171,3 +172,25 @@ def create_tag(db: Session, tag: models.Tag) -> models.Tag:
     db.flush()
     db.refresh(tag)
     return tag
+
+
+### MispTag
+
+
+def get_misp_tags(db: Session) -> list[models.MispTag] | None:
+    return db.query(models.MispTag).all()
+
+def get_misp_tag_by_tag_name(db:Session, request: schemas.MispTagRequest) -> models.MispTag | None:
+    return db.query(models.MispTag).filter(models.MispTag.tag_name == request.tag_name).one_or_none():
+
+
+def create_misp_tag(db: Session, misptag: models.MispTag) -> models.MispTag | None:
+    db.add(misptag)
+    db.flush()
+    db.refresh(misptag)
+    return misptag
+
+
+def search_misp_tags_by_tag_name(db: Session, words: Optional[List[str]]) -> models.MispTag:
+    return db.query(models.MispTag).filter(models.MispTag.tag_name.bool_op("@@")(func.to_tsquery("|".join(words)))).all()
+

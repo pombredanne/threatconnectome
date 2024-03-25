@@ -2,10 +2,9 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi import Query as QueryParameter
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app import models, schemas
+from app import models, persistence, schemas
 from app.auth import get_current_user
 from app.database import get_db
 
@@ -19,7 +18,7 @@ def get_misp_tags(
     """
     Get all misp tags.
     """
-    return db.query(models.MispTag).all()
+    return persistence.get_misp_tags(db)
 
 
 @router.post("", response_model=schemas.MispTagResponse)
@@ -31,12 +30,11 @@ def create_misp_tag(
     """
     Create a misp tag.
     """
-    if db.query(models.MispTag).filter(models.MispTag.tag_name == request.tag_name).one_or_none():
+    if persistence.get_misp_tag_by_tag_name(db, request):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Already exists")
-    misptag = models.MispTag(tag_name=request.tag_name)
-    db.add(misptag)
+
+    misptag = persistence.create_misp_tag(models.MispTag(tag_name=request.tag_name))
     db.commit()
-    db.refresh(misptag)
     return misptag
 
 
@@ -52,11 +50,7 @@ def search_misp_tags(
     """
     # If no words were provided, return all misp tags.
     if words is None:
-        return db.query(models.MispTag).all()
+        return persistence.get_misp_tags()
 
     # Otherwise, search for tags that match the provided words.
-    return (
-        db.query(models.MispTag)
-        .filter(models.MispTag.tag_name.bool_op("@@")(func.to_tsquery("|".join(words))))
-        .all()
-    )
+    return persistence.search_misp_tags_by_tag_name(db, words)
