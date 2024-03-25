@@ -742,58 +742,6 @@ def update_pteam(
     return pteam
 
 
-def _get_pteam_topic_statuses_summary(db: Session, pteam: models.PTeam, tag: models.Tag) -> dict:
-    rows = (
-        db.query(
-            models.Tag,
-            models.Topic,
-            models.PTeamTopicTagStatus.created_at.label("executed_at"),
-            models.PTeamTopicTagStatus.topic_status,
-        )
-        .filter(
-            models.Tag.tag_id == tag.tag_id,
-        )
-        .join(
-            models.TopicTag, models.TopicTag.tag_id.in_([models.Tag.tag_id, models.Tag.parent_id])
-        )
-        .join(
-            models.Topic,
-            and_(
-                models.Topic.disabled.is_(False),
-                models.Topic.topic_id == models.TopicTag.topic_id,
-            ),
-        )
-        .outerjoin(
-            models.CurrentPTeamTopicTagStatus,
-            and_(
-                models.CurrentPTeamTopicTagStatus.pteam_id == pteam.pteam_id,
-                models.CurrentPTeamTopicTagStatus.tag_id == models.Tag.tag_id,
-                models.CurrentPTeamTopicTagStatus.topic_id == models.TopicTag.topic_id,
-            ),
-        )
-        .outerjoin(
-            models.PTeamTopicTagStatus,
-        )
-        .order_by(
-            models.Topic.threat_impact,
-            models.Topic.updated_at.desc(),
-        )
-        .all()
-    )
-
-    return {
-        "tag_id": tag.tag_id,
-        "topics": [
-            {
-                **row.Topic.__dict__,
-                "topic_status": row.topic_status or models.TopicStatusType.alerted,
-                "executed_at": row.executed_at,
-            }
-            for row in rows
-        ],
-    }
-
-
 @router.get(
     "/{pteam_id}/topicstatusessummary/{tag_id}", response_model=schemas.PTeamTopicStatusesSummary
 )
@@ -814,7 +762,7 @@ def get_pteam_topic_statuses_summary(
         raise NO_SUCH_TAG
     if tag not in {ref.tag for ref in pteam.references}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
-    return _get_pteam_topic_statuses_summary(db, pteam, tag)
+    return command.get_pteam_topic_statuses_summary(db, pteam, tag)
 
 
 @router.get("/{pteam_id}/topicstatus", response_model=list[schemas.TopicStatusResponse])

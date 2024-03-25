@@ -17,18 +17,6 @@ def get_pteam_tag_ids(db: Session, pteam_id: UUID | str) -> Sequence[str]:
     ).all()
 
 
-def is_pteamtag(db: Session, pteam_id: UUID | str, tag_id: UUID | str) -> bool:
-    return (
-        db.execute(
-            select(models.PTeamTagReference).where(
-                models.PTeamTagReference.pteam_id == str(pteam_id),
-                models.PTeamTagReference.tag_id == str(tag_id),
-            )
-        ).first()
-        is not None
-    )
-
-
 def missing_pteam_admin(db: Session, pteam: models.PTeam) -> bool:
     return (
         db.execute(
@@ -204,6 +192,58 @@ def get_pteamtags_summary(db: Session, pteam: models.PTeam) -> dict:
     }
 
     return summary
+
+
+def get_pteam_topic_statuses_summary(db: Session, pteam: models.PTeam, tag: models.Tag) -> dict:
+    rows = (
+        db.query(
+            models.Tag,
+            models.Topic,
+            models.PTeamTopicTagStatus.created_at.label("executed_at"),
+            models.PTeamTopicTagStatus.topic_status,
+        )
+        .filter(
+            models.Tag.tag_id == tag.tag_id,
+        )
+        .join(
+            models.TopicTag, models.TopicTag.tag_id.in_([models.Tag.tag_id, models.Tag.parent_id])
+        )
+        .join(
+            models.Topic,
+            and_(
+                models.Topic.disabled.is_(False),
+                models.Topic.topic_id == models.TopicTag.topic_id,
+            ),
+        )
+        .outerjoin(
+            models.CurrentPTeamTopicTagStatus,
+            and_(
+                models.CurrentPTeamTopicTagStatus.pteam_id == pteam.pteam_id,
+                models.CurrentPTeamTopicTagStatus.tag_id == models.Tag.tag_id,
+                models.CurrentPTeamTopicTagStatus.topic_id == models.TopicTag.topic_id,
+            ),
+        )
+        .outerjoin(
+            models.PTeamTopicTagStatus,
+        )
+        .order_by(
+            models.Topic.threat_impact,
+            models.Topic.updated_at.desc(),
+        )
+        .all()
+    )
+
+    return {
+        "tag_id": tag.tag_id,
+        "topics": [
+            {
+                **row.Topic.__dict__,
+                "topic_status": row.topic_status or models.TopicStatusType.alerted,
+                "executed_at": row.executed_at,
+            }
+            for row in rows
+        ],
+    }
 
 
 def check_tag_is_related_to_topic(db: Session, tag: models.Tag, topic: models.Topic) -> bool:
