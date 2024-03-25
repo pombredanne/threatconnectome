@@ -56,13 +56,32 @@ def delete_action(db: Session, action: models.TopicAction) -> None:
     db.flush()
 
 
+### ATeam
+
+
 def get_ateam_by_id(db: Session, ateam_id: UUID | str) -> models.ATeam | None:
-    return db.query(models.ATeam).filter(models.ATeam.ateam_id == str(ateam_id)).one_or_none()
+    return db.scalars(
+        select(models.ATeam).where(models.ATeam.ateam_id == str(ateam_id))
+    ).one_or_none()
 
 
-def get_all_ateams(db: Session) -> list[models.ATeam]:
-    return db.query(models.ATeam).all()
+def get_all_ateams(db: Session) -> Sequence[models.ATeam]:
+    return db.scalars(select(models.ATeam)).all()
 
+
+def expire_ateam_invitations(db: Session) -> None:
+    db.execute(
+        delete(models.ATeamInvitation).where(
+            or_(
+                models.ATeamInvitation.expiration < datetime.now(),
+                and_(
+                    models.ATeamInvitation.limit_count.is_not(None),
+                    models.ATeamInvitation.limit_count <= models.ATeamInvitation.used_count,
+                ),
+            ),
+        )
+    )
+    db.flush()
 
 ### PTeam
 

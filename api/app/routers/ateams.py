@@ -24,6 +24,7 @@ from app.slack import validate_slack_webhook_url
 
 router = APIRouter(prefix="/ateams", tags=["ateams"])
 
+NO_SUCH_ATEAM = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such ateam")
 NO_SUCH_PTEAM = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam")
 NOT_HAVE_AUTH = HTTPException(
     status_code=status.HTTP_403_FORBIDDEN,
@@ -164,7 +165,7 @@ def apply_invitation(
     """
     Apply invitation to ateam.
     """
-    _expire_invitations(db)
+    persistence.expire_ateam_invitations(db)
 
     invitation = (
         db.query(models.ATeamInvitation)
@@ -465,19 +466,6 @@ def delete_member(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-def _expire_invitations(db: Session):
-    db.query(models.ATeamInvitation).filter(
-        or_(
-            models.ATeamInvitation.expiration < datetime.now(),
-            and_(
-                models.ATeamInvitation.limit_count.is_not(None),
-                models.ATeamInvitation.used_count >= models.ATeamInvitation.limit_count,
-            ),
-        )
-    ).delete()
-    db.commit()
-
-
 @router.post("/{ateam_id}/invitation", response_model=schemas.ATeamInvitationResponse)
 def create_invitation(
     ateam_id: UUID,
@@ -509,7 +497,7 @@ def create_invitation(
             detail="Unwise limit_count (give null for unlimited)",
         )
 
-    _expire_invitations(db)
+    persistence.expire_ateam_invitations(db)
 
     del data.authorities
     invitation = models.ATeamInvitation(
@@ -544,7 +532,7 @@ def list_invitation(
         on_error=status.HTTP_403_FORBIDDEN,
     )
 
-    _expire_invitations(db)
+    persistence.expire_ateam_invitations(db)
 
     return [
         {**item.__dict__, "authorities": models.ATeamAuthIntFlag(item.authority).to_enums()}
@@ -570,7 +558,7 @@ def delete_invitation(
         models.ATeamAuthIntFlag.INVITE,
         on_error=status.HTTP_403_FORBIDDEN,
     )
-    _expire_invitations(db)
+    persistence.expire_ateam_invitations(db)
 
     # omit validating invitation to avoid raising error if already expired.
     db.query(models.ATeamInvitation).filter(
