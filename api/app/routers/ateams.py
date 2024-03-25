@@ -215,7 +215,7 @@ def apply_watching_request(
     """
     Apply watching request.
     """
-    _expire_watching_requests(db)
+    persistence.expire_ateam_watching_requests(db)
 
     watching_request = (
         db.query(models.ATeamWatchingRequest)
@@ -533,6 +533,7 @@ def list_invitation(
     )
 
     persistence.expire_ateam_invitations(db)
+    db.commit()
 
     return [
         {**item.__dict__, "authorities": models.ATeamAuthIntFlag(item.authority).to_enums()}
@@ -634,19 +635,6 @@ def remove_watching_pteam(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-def _expire_watching_requests(db: Session):
-    db.query(models.ATeamWatchingRequest).filter(
-        or_(
-            models.ATeamWatchingRequest.expiration < datetime.now(),
-            and_(
-                models.ATeamWatchingRequest.limit_count.is_not(None),
-                models.ATeamWatchingRequest.used_count >= models.ATeamWatchingRequest.limit_count,
-            ),
-        )
-    ).delete()
-    db.commit()
-
-
 @router.post("/{ateam_id}/watching_request", response_model=schemas.ATeamWatchingRequestResponse)
 def create_watching_request(
     ateam_id: UUID,
@@ -671,7 +659,7 @@ def create_watching_request(
             detail="Unwise limit_count (give null for unlimited)",
         )
 
-    _expire_watching_requests(db)
+    persistence.expire_ateam_watching_requests(db)
 
     watching_request = models.ATeamWatchingRequest(
         ateam_id=str(ateam_id), user_id=current_user.user_id, **data.model_dump()
@@ -704,8 +692,8 @@ def list_watching_request(
         on_error=status.HTTP_403_FORBIDDEN,
     )
 
-    _expire_watching_requests(db)
-
+    persistence.expire_ateam_watching_requests(db)
+    db.commit()
     return ateam.watching_requests
 
 
@@ -727,7 +715,7 @@ def delete_watching_request(
         models.ATeamAuthIntFlag.ADMIN,
         on_error=status.HTTP_403_FORBIDDEN,
     )
-    _expire_watching_requests(db)
+    persistence.expire_ateam_watching_requests(db)
 
     # omit validating request to avoid raising error if already expired.
     db.query(models.ATeamWatchingRequest).filter(

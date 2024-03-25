@@ -84,6 +84,22 @@ def expire_ateam_invitations(db: Session) -> None:
     db.flush()
 
 
+def expire_ateam_watching_requests(db: Session) -> None:
+    db.execute(
+        delete(models.ATeamWatchingRequest).where(
+            or_(
+                models.ATeamWatchingRequest.expiration < datetime.now(),
+                and_(
+                    models.ATeamWatchingRequest.limit_count.is_not(None),
+                    models.ATeamWatchingRequest.limit_count
+                    <= models.ATeamWatchingRequest.used_count,
+                ),
+            ),
+        )
+    )
+    db.flush()
+
+
 def create_ateam_topic_comment(
     db: Session, comment: models.ATeamTopicComment
 ) -> models.ATeamTopicComment:
