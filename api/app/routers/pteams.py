@@ -675,12 +675,9 @@ def remove_pteamtags_by_group(
     if not check_pteam_membership(db, pteam, current_user):
         raise NOT_A_PTEAM_MEMBER
 
-    db.execute(
-        delete(models.PTeamTagReference).where(
-            models.PTeamTagReference.pteam_id == str(pteam_id),
-            models.PTeamTagReference.group == group,
-        )
-    )
+    for ptr in persistence.get_pteam_tag_references_by_group(db, pteam_id, group):
+        persistence.delete_pteam_tag_reference(db, ptr)
+
     db.commit()
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -119,15 +119,6 @@ def expire_pteam_invitations(db: Session) -> None:
     db.flush()
 
 
-def get_pteam_tag_references(
-    db: Session,
-    pteam_id: UUID | str,
-) -> Sequence[models.PTeamTagReference]:
-    return db.scalars(
-        select(models.PTeamTagReference).where(models.PTeamTagReference.pteam_id == str(pteam_id))
-    ).all()
-
-
 def create_pteam_tag_reference(
     db: Session,
     ptr: models.PTeamTagReference,
@@ -143,6 +134,15 @@ def delete_pteam_tag_reference(db: Session, ptr: models.PTeamTagReference):
     db.flush()
 
 
+def get_pteam_tag_references(
+    db: Session,
+    pteam_id: UUID | str,
+) -> Sequence[models.PTeamTagReference]:
+    return db.scalars(
+        select(models.PTeamTagReference).where(models.PTeamTagReference.pteam_id == str(pteam_id))
+    ).all()
+
+
 def get_pteam_tag_references_by_tag_id(
     db: Session,
     pteam_id: UUID | str,
@@ -152,6 +152,19 @@ def get_pteam_tag_references_by_tag_id(
         select(models.PTeamTagReference).where(
             models.PTeamTagReference.pteam_id == str(pteam_id),
             models.PTeamTagReference.tag_id == str(tag_id),
+        )
+    ).all()
+
+
+def get_pteam_tag_references_by_group(
+    db: Session,
+    pteam_id: UUID | str,
+    group: str,
+) -> Sequence[models.PTeamTagReference]:
+    return db.scalars(
+        select(models.PTeamTagReference).where(
+            models.PTeamTagReference.pteam_id == str(pteam_id),
+            models.PTeamTagReference.group == group,
         )
     ).all()
 
