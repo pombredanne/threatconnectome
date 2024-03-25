@@ -10,7 +10,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import models, schemas
+from app import models, persistence, schemas
 from app.alert import alert_new_topic
 from app.auth import get_current_user, token_scheme
 from app.common import (
@@ -22,7 +22,6 @@ from app.common import (
     fix_current_status_by_deleted_topic,
     fix_current_status_by_topic,
     get_misp_tag,
-    get_topics_internal,
     search_topics_internal,
     validate_action,
     validate_misp_tag,
@@ -52,7 +51,7 @@ def get_topics(
         }
         return hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
     """
-    return get_topics_internal(db, current_user.user_id)
+    return persistence.get_all_topics(db, ignore_disabled=False)
 
 
 @router.get("/search", response_model=schemas.SearchTopicsResponse)
@@ -458,7 +457,7 @@ def get_pteam_topic_actions(
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
     pteam = validate_pteam(db, pteam_id, on_error=status.HTTP_404_NOT_FOUND)
     if not check_pteam_membership(db, pteam, current_user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No a pteam member")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a pteam member")
 
     actions = db.scalars(
         select(models.TopicAction).where(models.TopicAction.topic_id == str(topic_id))

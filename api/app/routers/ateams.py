@@ -971,7 +971,7 @@ def delete_topic_comment(
     """
     Delete ateam topic comment.
     """
-    if not (ateam:=persistence.get_ateam_by_id(db, ateam_id)):
+    if not (ateam := persistence.get_ateam_by_id(db, ateam_id)):
         raise NO_SUCH_ATEAM
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
     comment = persistence.get_ateam_topic_comment_by_id(db, comment_id)

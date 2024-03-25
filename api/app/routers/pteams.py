@@ -14,7 +14,6 @@ from app.common import (
     check_pteam_membership,
     fix_current_status_by_pteam,
     get_or_create_topic_tag,
-    get_topics_internal,
     pteamtag_try_auto_close_topic,
     set_pteam_topic_status_internal,
     validate_actionlog,
@@ -38,6 +37,7 @@ NOT_HAVE_AUTH = HTTPException(
 )
 NO_SUCH_ATEAM = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such ateam")
 NO_SUCH_PTEAM = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam")
+NO_SUCH_TOPIC = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such topic")
 NO_SUCH_TAG = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such tag")
 
 
@@ -270,7 +270,9 @@ def get_pteam_topics(
     tag_ids = command.get_pteam_tag_ids(db, pteam_id)
     if not tag_ids:
         return []
-    return get_topics_internal(db, current_user.user_id, tag_ids=tag_ids)
+    return persistence.get_topics_by_tag_ids(
+        db, list(tag_ids), ignore_parent=False, ignore_disabled=False
+    )
 
 
 @router.post("", response_model=schemas.PTeamInfo)
@@ -783,7 +785,7 @@ def set_pteam_topic_status(
 
     # TODO: should check pteam auth: topic_status
 
-    if not (topic := validate_topic(db, topic_id)):  # FIXME: use get_topic_by_id
+    if not (topic := persistence.get_topic_by_id(db, topic_id)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such topic")
     # TODO: should check pteam topic???
     # TODO: should check topic tag?? -- should care about parent&child

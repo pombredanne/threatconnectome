@@ -410,62 +410,6 @@ def search_topics_internal(
     return result
 
 
-def get_topics_internal(
-    db: Session,
-    user_id: Union[UUID, str],
-    title_words: List[str] | None = None,
-    abstract_words: List[str] | None = None,
-    threat_impacts: List[int] | None = None,
-    misp_tag_ids: List[UUID] | None = None,
-    tag_ids: Sequence[UUID | str] | None = None,
-) -> List[models.Topic]:
-    user_id = str(user_id)
-    return (
-        db.query(models.Topic)
-        .distinct()
-        .filter(
-            (
-                true()
-                if title_words is None
-                else models.Topic.title.bool_op("@@")(
-                    func.to_tsquery("|".join("(" + "&".join(t.split()) + ")" for t in title_words))
-                )
-            ),
-            (
-                true()
-                if abstract_words is None
-                else models.Topic.abstract.bool_op("@@")(
-                    func.to_tsquery(
-                        "|".join("(" + "&".join(a.split()) + ")" for a in abstract_words)
-                    )
-                )
-            ),
-            true() if threat_impacts is None else models.Topic.threat_impact.in_(threat_impacts),
-            (
-                true()
-                if misp_tag_ids is None
-                else models.Topic.topic_id.in_(
-                    db.query(models.TopicMispTag.topic_id).filter(
-                        models.TopicMispTag.tag_id.in_(map(str, misp_tag_ids))
-                    )
-                )
-            ),
-            (
-                true()
-                if tag_ids is None
-                else models.Topic.topic_id.in_(
-                    db.query(models.TopicTag.topic_id).filter(
-                        models.TopicTag.tag_id.in_(map(str, tag_ids))
-                    )
-                )
-            ),
-            models.Topic.disabled.is_(False),
-        )
-        .order_by(models.Topic.threat_impact, models.Topic.updated_at.desc())
-        .all()
-    )
-
-
 def create_action_internal(
     db: Session,
     current_user: models.Account,
