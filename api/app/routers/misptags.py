@@ -33,7 +33,7 @@ def create_misp_tag(
     if persistence.get_misp_tag_by_tag_name(db, request):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Already exists")
 
-    misptag = persistence.create_misp_tag(models.MispTag(tag_name=request.tag_name))
+    misptag = persistence.create_misp_tag(db, models.MispTag(tag_name=request.tag_name))
     db.commit()
     return misptag
 
