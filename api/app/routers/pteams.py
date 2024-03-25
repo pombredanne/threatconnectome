@@ -949,19 +949,23 @@ def create_invitation(
     persistence.expire_pteam_invitations(db)
 
     del request.authorities
-    token = models.PTeamInvitation(
-        pteam_id=str(pteam_id),
-        user_id=current_user.user_id,
-        authority=intflag,
-        **request.model_dump(),
+    invitation = persistence.create_pteam_invitation(
+        db,
+        models.PTeamInvitation(
+            pteam_id=str(pteam_id),
+            user_id=current_user.user_id,
+            authority=intflag,
+            **request.model_dump(),
+        ),
     )
-    db.add(token)
-    db.commit()
-    db.refresh(token)
 
-    return schemas.PTeamInvitationResponse(
-        **token.__dict__, authorities=models.PTeamAuthIntFlag(token.authority).to_enums()
-    )
+    db.commit()
+    db.refresh(invitation)
+
+    return {
+        **invitation.__dict__,
+        "authorities": models.PTeamAuthIntFlag(invitation.authority).to_enums(),
+    }
 
 
 @router.get("/{pteam_id}/invitation", response_model=list[schemas.PTeamInvitationResponse])
