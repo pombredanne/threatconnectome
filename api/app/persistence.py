@@ -161,6 +161,17 @@ def get_all_ateams(db: Session) -> Sequence[models.ATeam]:
     return db.scalars(select(models.ATeam)).all()
 
 
+def get_ateam_invitation_by_id(
+    db: Session,
+    invitation_id: UUID | str,
+) -> models.ATeamInvitation | None:
+    return db.scalars(
+        select(models.ATeamInvitation).where(
+            models.ATeamInvitation.invitation_id == str(invitation_id)
+        )
+    ).one_or_none()
+
+
 def expire_ateam_invitations(db: Session) -> None:
     db.execute(
         delete(models.ATeamInvitation).where(
@@ -174,6 +185,17 @@ def expire_ateam_invitations(db: Session) -> None:
         )
     )
     db.flush()
+
+
+def get_ateam_watching_request_by_id(
+    db: Session,
+    request_id: UUID | str,
+) -> models.ATeamWatchingRequest | None:
+    return db.scalars(
+        select(models.ATeamWatchingRequest).where(
+            models.ATeamWatchingRequest.request_id == str(request_id)
+        )
+    ).one_or_none()
 
 
 def expire_ateam_watching_requests(db: Session) -> None:

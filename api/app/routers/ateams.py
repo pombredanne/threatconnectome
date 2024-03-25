@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
-from sqlalchemy import and_, nullsfirst, or_, select
+from sqlalchemy import and_, nullsfirst, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import true
 
@@ -167,19 +167,7 @@ def apply_invitation(
     """
     persistence.expire_ateam_invitations(db)
 
-    invitation = (
-        db.query(models.ATeamInvitation)
-        .filter(
-            models.ATeamInvitation.invitation_id == str(data.invitation_id),
-            or_(
-                models.ATeamInvitation.limit_count.is_(None),
-                models.ATeamInvitation.limit_count > models.ATeamInvitation.used_count,
-            ),
-        )
-        .with_for_update()
-        .one_or_none()
-    )  # lock and block!
-    if invitation is None:
+    if not (invitation := persistence.get_ateam_invitation_by_id(db, data.invitation_id)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid (or expired) invitation id"
         )
@@ -217,19 +205,7 @@ def apply_watching_request(
     """
     persistence.expire_ateam_watching_requests(db)
 
-    watching_request = (
-        db.query(models.ATeamWatchingRequest)
-        .filter(
-            models.ATeamWatchingRequest.request_id == str(data.request_id),
-            or_(
-                models.ATeamWatchingRequest.limit_count.is_(None),
-                models.ATeamWatchingRequest.limit_count > models.ATeamWatchingRequest.used_count,
-            ),
-        )
-        .with_for_update()
-        .one_or_none()
-    )  # lock and block!
-    if watching_request is None:
+    if not (watching_request := persistence.get_ateam_watching_request_by_id(db, data.request_id)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid (or expired) request id"
         )
@@ -574,11 +550,7 @@ def invited_ateam(invitation_id: UUID, db: Session = Depends(get_db)):
     """
     Get invited ateam info.
     """
-    invitation = (
-        db.query(models.ATeamInvitation)
-        .filter(models.ATeamInvitation.invitation_id == str(invitation_id))
-        .one_or_none()
-    )
+    invitation = persistence.get_ateam_invitation_by_id(db, invitation_id)
     if invitation is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="No such invitation (or already expired)"
@@ -730,11 +702,7 @@ def get_requested_ateam(request_id: UUID, db: Session = Depends(get_db)):
     """
     Get ateam info of watching request.
     """
-    watching_request = (
-        db.query(models.ATeamWatchingRequest)
-        .filter(models.ATeamWatchingRequest.request_id == str(request_id))
-        .one_or_none()
-    )
+    watching_request = persistence.get_ateam_watching_request_by_id(db, request_id)
     if watching_request is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
