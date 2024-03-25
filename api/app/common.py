@@ -141,10 +141,9 @@ def check_pteam_membership(
         return True
     if ignore_ateam:
         return False
-    for ateam in user.ateams:
-        for pteam_via_ateam in ateam.pteams:
-            if user in pteam_via_ateam.members:
-                return True
+    # check if a member of ateam which watches the pteam
+    if any(user in ateam.members for ateam in pteam.ateams):
+        return True
     return False
 
 
