@@ -1041,7 +1041,9 @@ def set_pteam_topic_status_internal(
     tag: models.Tag,  # should be PTeamTag, not TopicTag
     data: schemas.TopicStatusRequest,
 ) -> schemas.TopicStatusResponse | None:
-    current_status = get_current_pteam_topic_tag_status(db, pteam, topic_id, tag)
+    current_status = persistence.get_current_pteam_topic_tag_status(
+        db, pteam.pteam_id, topic_id, tag.tag_id
+    )
     new_status = models.PTeamTopicTagStatus(
         pteam_id=pteam.pteam_id,
         topic_id=str(topic_id),
@@ -1053,7 +1055,10 @@ def set_pteam_topic_status_internal(
         assignees=(
             [user.user_id]
             if (
-                current_status is None
+                (
+                    current_status is None
+                    or current_status.topic_status == models.TopicStatusType.alerted
+                )
                 and data.assignees == []
                 and data.topic_status == models.TopicStatusType.acknowledged
             )
@@ -1062,25 +1067,34 @@ def set_pteam_topic_status_internal(
         scheduled_at=data.scheduled_at,
         created_at=datetime.now(),
     )
-    db.add(new_status)
-    db.flush()
-    db.refresh(new_status)
+    new_status = persistence.create_pteam_topic_tag_status(db, new_status)
 
-    row = db.query(models.CurrentPTeamTopicTagStatus).filter(
-        models.CurrentPTeamTopicTagStatus.pteam_id == new_status.pteam_id,
-        models.CurrentPTeamTopicTagStatus.topic_id == new_status.topic_id,
-        models.CurrentPTeamTopicTagStatus.tag_id == new_status.tag_id,
-    ).one_or_none() or models.CurrentPTeamTopicTagStatus(  # be None at auto-closing
-        pteam_id=pteam.pteam_id,
-        topic_id=str(topic_id),
-        tag_id=tag.tag_id,
-        status_id=None,
-        threat_impact=None,  # not fixed at this time,
-        updated_at=None,  # and should be fixed by calling fix_current_status_by_...
+    if not current_status:
+        current_status = persistence.create_current_pteam_topic_tag_status(
+            db,
+            models.CurrentPTeamTopicTagStatus(
+                pteam_id=pteam.pteam_id,
+                topic_id=str(topic_id),
+                tag_id=tag.tag_id,
+                status_id=None,  # fill later
+                threat_impact=None,  # fill later
+                updated_at=None,  # fill later
+            ),
+        )
+    current_status.status_id = new_status.status_id
+    current_status.topic_status = new_status.topic_status
+
+    # FIXME!  topic should be given by arg
+    topic = db.scalars(
+        select(models.Topic).where(models.Topic.topic_id == str(topic_id))
+    ).one_or_none()
+    assert topic
+
+    current_status.threat_impact = topic.threat_impact
+    current_status.updated_at = (
+        None if new_status.topic_status == models.TopicStatusType.completed else topic.updated_at
     )
-    row.status_id = new_status.status_id
-    row.topic_status = new_status.topic_status
-    db.add(row)  # insert or update
+
     db.flush()
 
     return pteam_topic_tag_status_to_response(db, new_status)

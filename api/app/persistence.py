@@ -83,6 +83,7 @@ def expire_ateam_invitations(db: Session) -> None:
     )
     db.flush()
 
+
 ### PTeam
 
 
@@ -242,6 +243,58 @@ def create_pteam_authority(db: Session, auth: models.PTeamAuthority) -> models.P
     db.flush()
     db.refresh(auth)
     return auth
+
+
+### PTeamTopicTagStatus
+
+
+def create_pteam_topic_tag_status(
+    db: Session,
+    status: models.PTeamTopicTagStatus,
+) -> models.PTeamTopicTagStatus:
+    db.add(status)
+    db.flush()
+    db.refresh(status)
+    return status
+
+
+def get_pteam_topic_tag_status_by_id(
+    db: Session,
+    status_id: UUID | str,
+) -> models.PTeamTopicTagStatus | None:
+    return db.scalars(
+        select(models.PTeamTopicTagStatus).where(
+            models.PTeamTopicTagStatus.status_id == str(status_id)
+        )
+    ).one_or_none()
+
+
+### CurrentPTeamTopicTagStatus
+
+
+def create_current_pteam_topic_tag_status(
+    db: Session,
+    status: models.CurrentPTeamTopicTagStatus,
+) -> models.CurrentPTeamTopicTagStatus:
+    db.add(status)
+    db.flush()
+    db.refresh(status)
+    return status
+
+
+def get_current_pteam_topic_tag_status(
+    db: Session,
+    pteam_id: UUID | str,
+    topic_id: UUID | str,
+    tag_id: UUID | str,  # should be PTeamTag, not TopicTag
+) -> models.CurrentPTeamTopicTagStatus | None:
+    return db.scalars(
+        select(models.CurrentPTeamTopicTagStatus).where(
+            models.CurrentPTeamTopicTagStatus.pteam_id == str(pteam_id),
+            models.CurrentPTeamTopicTagStatus.topic_id == str(topic_id),
+            models.CurrentPTeamTopicTagStatus.tag_id == str(tag_id),
+        )
+    ).one_or_none()
 
 
 ### Artifact Tag

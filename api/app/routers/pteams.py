@@ -806,7 +806,7 @@ def set_pteam_topic_status(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Wrong topic status")
 
     for logging_id_ in data.logging_ids:
-        validate_actionlog(
+        validate_actionlog(  # FIXME: use get_actionlog_by_id
             db,
             logging_id=logging_id_,
             pteam_id=pteam_id,
@@ -820,9 +820,7 @@ def set_pteam_topic_status(
                 detail="Not a pteam member",
             )
 
-    ret = set_pteam_topic_status_internal(db, current_user, pteam, topic_id, tag, data)
-    assert ret
-    return ret
+    return set_pteam_topic_status_internal(db, current_user, pteam, topic_id, tag, data)
 
 
 @router.get(
