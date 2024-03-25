@@ -15,7 +15,6 @@ from app.common import (
     check_ateam_membership,
     check_pteam_auth,
     sortkey2orderby,
-    validate_ateam,
     validate_topic,
 )
 from app.constants import MEMBER_UUID, NOT_MEMBER_UUID, SYSTEM_UUID
@@ -238,8 +237,9 @@ def get_ateam(
     """
     Get ateam details. members only.
     """
-    ateam = validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert ateam
+    ateam = persistence.get_ateam_by_id(db, ateam_id)
+    if ateam is None:
+        raise NO_SUCH_ATEAM
     check_ateam_membership(db, ateam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
     return _make_ateam_info(ateam)
 
@@ -258,8 +258,9 @@ def update_ateam(
     if data.alert_slack and data.alert_slack.webhook_url:
         validate_slack_webhook_url(data.alert_slack.webhook_url)
 
-    ateam = validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert ateam
+    ateam = persistence.get_ateam_by_id(db, ateam_id)
+    if ateam is None:
+        raise NO_SUCH_ATEAM
     check_ateam_auth(
         db,
         ateam_id,
@@ -298,8 +299,9 @@ def update_ateam_auth(
       - 00000000-0000-0000-0000-0000cafe0001 : ateam member
       - 00000000-0000-0000-0000-0000cafe0002 : not ateam member
     """
-    ateam = validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert ateam
+    ateam = persistence.get_ateam_by_id(db, ateam_id)
+    if ateam is None:
+        raise NO_SUCH_ATEAM
     check_ateam_auth(
         db,
         ateam_id,
@@ -355,8 +357,9 @@ def get_ateam_auth(
       - 00000000-0000-0000-0000-0000cafe0001 : ateam member
       - 00000000-0000-0000-0000-0000cafe0002 : not ateam member
     """
-    ateam = validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert ateam
+    ateam = persistence.get_ateam_by_id(db, ateam_id)
+    if ateam is None:
+        raise NO_SUCH_ATEAM
     rows = (
         db.query(models.ATeamAuthority)
         .filter(
@@ -384,8 +387,9 @@ def get_ateam_members(
     """
     Get members of the ateam.
     """
-    ateam = validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert ateam
+    ateam = persistence.get_ateam_by_id(db, ateam_id)
+    if ateam is None:
+        raise NO_SUCH_ATEAM
     check_ateam_membership(db, ateam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
 
     return ateam.members
@@ -417,8 +421,9 @@ def delete_member(
     """
     User leaves the ateam.
     """
-    ateam = validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert ateam
+    ateam = persistence.get_ateam_by_id(db, ateam_id)
+    if ateam is None:
+        raise NO_SUCH_ATEAM
     if user_id in {MEMBER_UUID, NOT_MEMBER_UUID, SYSTEM_UUID}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot remove pseudo account"
@@ -452,7 +457,9 @@ def create_invitation(
     """
     Create a new ateam invitation token.
     """
-    validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
+    ateam = persistence.get_ateam_by_id(db, ateam_id)
+    if ateam is None:
+        raise NO_SUCH_ATEAM
     check_ateam_auth(
         db,
         ateam_id,
@@ -498,8 +505,9 @@ def list_invitation(
     """
     List effective invitations.
     """
-    ateam = validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert ateam
+    ateam = persistence.get_ateam_by_id(db, ateam_id)
+    if ateam is None:
+        raise NO_SUCH_ATEAM
     check_ateam_auth(
         db,
         ateam_id,
@@ -527,7 +535,8 @@ def delete_invitation(
     """
     Invalidate invitation to ateam.
     """
-    validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
+    if not persistence.get_ateam_by_id(db, ateam_id):
+        raise NO_SUCH_ATEAM
     check_ateam_auth(
         db,
         ateam_id,
@@ -573,8 +582,9 @@ def get_watching_pteams(
     """
     Get watching pteams of the ateam.
     """
-    ateam = validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert ateam
+    ateam = persistence.get_ateam_by_id(db, ateam_id)
+    if ateam is None:
+        raise NO_SUCH_ATEAM
     check_ateam_membership(db, ateam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
 
     return ateam.pteams
@@ -590,8 +600,9 @@ def remove_watching_pteam(
     """
     Remove pteam from watching list.
     """
-    ateam = validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert ateam
+    ateam = persistence.get_ateam_by_id(db, ateam_id)
+    if ateam is None:
+        raise NO_SUCH_ATEAM
     check_ateam_auth(
         db,
         ateam_id,
@@ -617,7 +628,8 @@ def create_watching_request(
     """
     Create a new ateam watching request token.
     """
-    validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
+    if not persistence.get_ateam_by_id(db, ateam_id):
+        raise NO_SUCH_ATEAM
     check_ateam_auth(
         db,
         ateam_id,
@@ -654,8 +666,9 @@ def list_watching_request(
     """
     List effective watching_request.
     """
-    ateam = validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert ateam
+    ateam = persistence.get_ateam_by_id(db, ateam_id)
+    if ateam is None:
+        raise NO_SUCH_ATEAM
     check_ateam_auth(
         db,
         ateam_id,
@@ -679,7 +692,8 @@ def delete_watching_request(
     """
     Invalidate watching request.
     """
-    validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
+    if not persistence.get_ateam_by_id(db, ateam_id):
+        raise NO_SUCH_ATEAM
     check_ateam_auth(
         db,
         ateam_id,
@@ -741,8 +755,8 @@ def get_topic_status(
     - Empty string as **search** will be ignored.
     - The secondary sort key is updated_at_desc or threat_impact.
     """
-    ateam = validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert ateam
+    if not persistence.get_ateam_by_id(db, ateam_id):
+        raise NO_SUCH_ATEAM
     check_ateam_membership(db, ateam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
 
     # ignore empty search.
@@ -903,7 +917,8 @@ def get_topic_comments(
     """
     Get ateam topic comments.
     """
-    validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
+    if not persistence.get_ateam_by_id(db, ateam_id):
+        raise NO_SUCH_ATEAM
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
     check_ateam_membership(db, ateam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
     return command.get_atema_topic_comments(db, ateam_id, topic_id)
@@ -922,7 +937,8 @@ def add_topic_comment(
     """
     Add ateam topic comment.
     """
-    validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
+    if not persistence.get_ateam_by_id(db, ateam_id):
+        raise NO_SUCH_ATEAM
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
     check_ateam_membership(db, ateam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
     new_comment = models.ATeamTopicComment(
@@ -953,7 +969,8 @@ def update_topic_comment(
     """
     Update ateam topic comment.
     """
-    validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
+    if not persistence.get_ateam_by_id(db, ateam_id):
+        raise NO_SUCH_ATEAM
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
     comment = persistence.get_ateam_topic_comment_by_id(db, comment_id)
     if not comment:
@@ -980,7 +997,8 @@ def delete_topic_comment(
     """
     Delete ateam topic comment.
     """
-    validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
+    if not persistence.get_ateam_by_id(db, ateam_id):
+        raise NO_SUCH_ATEAM
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
     comment = persistence.get_ateam_topic_comment_by_id(db, comment_id)
     if not comment:
