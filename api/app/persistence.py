@@ -214,6 +214,32 @@ def expire_ateam_watching_requests(db: Session) -> None:
     db.flush()
 
 
+### ATeamAuthority
+
+
+def get_ateam_authority(
+    db: Session,
+    ateam_id: UUID | str,
+    user_id: UUID | str,
+) -> models.ATeamAuthority | None:
+    return db.scalars(
+        select(models.ATeamAuthority).where(
+            models.ATeamAuthority.ateam_id == str(ateam_id),
+            models.ATeamAuthority.user_id == str(user_id),
+        )
+    ).one_or_none()
+
+
+def create_ateam_authority(db: Session, auth: models.ATeamAuthority) -> models.ATeamAuthority:
+    db.add(auth)
+    db.flush()
+    db.refresh(auth)
+    return auth
+
+
+### ATeamTopicComment
+
+
 def create_ateam_topic_comment(
     db: Session, comment: models.ATeamTopicComment
 ) -> models.ATeamTopicComment:

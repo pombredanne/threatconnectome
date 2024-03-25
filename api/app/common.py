@@ -171,57 +171,38 @@ def check_pteam_auth(
 
 
 def check_ateam_membership(
-    db: Session,
-    ateam_id: Union[UUID, str],
-    user_id: Union[UUID, str],
-    on_error: Optional[int] = None,
+    ateam: models.ATeam | None,
+    user: models.Account | None,
 ) -> bool:
-    if str(user_id) == str(SYSTEM_UUID):
+    if not ateam or not user:
+        return False
+    if user.user_id == str(SYSTEM_UUID):
         return True
-    row = (
-        db.query(models.ATeamAccount)
-        .filter(
-            models.ATeamAccount.ateam_id == str(ateam_id),
-            models.ATeamAccount.user_id == str(user_id),
-        )
-        .one_or_none()
-    )
-    if row is None and on_error is not None:
-        raise HTTPException(status_code=on_error, detail="Not an ateam member")
-    return row is not None
+    if user in ateam.members:
+        return True
+    return False
 
 
 def check_ateam_auth(
     db: Session,
-    ateam_id: Union[UUID, str],
-    user_id: Optional[Union[UUID, str]],
+    ateam: models.ATeam,
+    user: models.Account,
     required: models.ATeamAuthIntFlag,
-    on_error: Optional[int] = None,
 ) -> bool:
-    if user_id and str(user_id) == str(SYSTEM_UUID):
+    if user.user_id == str(SYSTEM_UUID):
         return True
-    str_user_ids = [str(NOT_MEMBER_UUID)]
-    if user_id and (
-        str(user_id) == str(MEMBER_UUID) or check_ateam_membership(db, ateam_id, user_id)
-    ):
-        str_user_ids += [str(user_id), str(MEMBER_UUID)]  # apply only if member
 
-    rows = (
-        db.query(models.ATeamAuthority.authority)
-        .filter(
-            models.ATeamAuthority.ateam_id == str(ateam_id),
-            models.ATeamAuthority.user_id.in_(str_user_ids),
-        )
-        .all()
-    )
-    auth = 0
-    for row in rows:
-        auth |= row.authority
-    if auth & required == required:  # OK
-        return True
-    if on_error is None:
-        return False
-    raise HTTPException(status_code=on_error, detail="You do not have authority")
+    user_auth = persistence.get_ateam_authority(db, ateam.ateam_id, user.user_id)
+    int_auth = int(user_auth.authority) if user_auth else 0
+    # append auth via pseudo-users
+    if not_member_auth := persistence.get_ateam_authority(db, ateam.ateam_id, NOT_MEMBER_UUID):
+        int_auth |= not_member_auth.authority
+    if user in ateam.members and (
+        member_auth := persistence.get_ateam_authority(db, ateam.ateam_id, MEMBER_UUID)
+    ):
+        int_auth |= member_auth.authority
+
+    return int_auth & required == required
 
 
 def validate_topic(

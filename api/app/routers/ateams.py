@@ -24,7 +24,10 @@ from app.slack import validate_slack_webhook_url
 router = APIRouter(prefix="/ateams", tags=["ateams"])
 
 NO_SUCH_ATEAM = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such ateam")
-NO_SUCH_PTEAM = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam")
+NOT_AN_ATEAM_MEMBER = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN,
+    detail="Not an ateam member",
+)
 NOT_HAVE_AUTH = HTTPException(
     status_code=status.HTTP_403_FORBIDDEN,
     detail="You do not have authority",
@@ -44,7 +47,7 @@ def _make_ateam_info(ateam: models.ATeam) -> schemas.ATeamInfo:
 
 def _modify_ateam_auth(
     db: Session,
-    ateam_id: Union[UUID, str],
+    ateam: models.ATeam,
     authes: List[
         Tuple[
             Union[UUID, str],  # user_id
@@ -60,13 +63,22 @@ def _modify_ateam_auth(
                     detail="Cannot give ADMIN to pseudo account",
                 )
         else:
-            check_ateam_membership(db, ateam_id, user_id, on_error=status.HTTP_400_BAD_REQUEST)
+            if not (user := persistence.get_account_by_id(db, user_id)):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid user id",
+                )
+            if not check_ateam_membership(ateam, user):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Not an ateam member",
+                )
 
     for user_id, auth in authes:
         row = (
             db.query(models.ATeamAuthority)
             .filter(
-                models.ATeamAuthority.ateam_id == str(ateam_id),
+                models.ATeamAuthority.ateam_id == ateam.ateam_id,
                 models.ATeamAuthority.user_id == str(user_id),
             )
             .one_or_none()
@@ -74,7 +86,7 @@ def _modify_ateam_auth(
         if row is None:
             if not auth:
                 continue  # nothing to remove
-            row = models.ATeamAuthority(ateam_id=str(ateam_id), user_id=str(user_id))
+            row = models.ATeamAuthority(ateam_id=ateam.ateam_id, user_id=str(user_id))
         if auth:
             row.authority = int(auth)
             db.add(row)
@@ -125,7 +137,7 @@ def create_ateam(
 
     _modify_ateam_auth(
         db,
-        ateam.ateam_id,
+        ateam,
         [
             (current_user.user_id, models.ATeamAuthIntFlag.ATEAM_MASTER),
             (MEMBER_UUID, models.ATeamAuthIntFlag.ATEAM_MEMBER),
@@ -240,7 +252,8 @@ def get_ateam(
     ateam = persistence.get_ateam_by_id(db, ateam_id)
     if ateam is None:
         raise NO_SUCH_ATEAM
-    check_ateam_membership(db, ateam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
+    if not check_ateam_membership(ateam, current_user):
+        raise NOT_AN_ATEAM_MEMBER
     return _make_ateam_info(ateam)
 
 
@@ -261,13 +274,8 @@ def update_ateam(
     ateam = persistence.get_ateam_by_id(db, ateam_id)
     if ateam is None:
         raise NO_SUCH_ATEAM
-    check_ateam_auth(
-        db,
-        ateam_id,
-        current_user.user_id,
-        models.ATeamAuthIntFlag.ADMIN,
-        on_error=status.HTTP_403_FORBIDDEN,
-    )
+    if not check_ateam_auth(db, ateam, current_user, models.ATeamAuthIntFlag.ADMIN):
+        raise NOT_HAVE_AUTH
     for key, value in data:
         if value is None:
             continue
@@ -302,13 +310,8 @@ def update_ateam_auth(
     ateam = persistence.get_ateam_by_id(db, ateam_id)
     if ateam is None:
         raise NO_SUCH_ATEAM
-    check_ateam_auth(
-        db,
-        ateam_id,
-        current_user.user_id,
-        models.ATeamAuthIntFlag.ADMIN,
-        on_error=status.HTTP_403_FORBIDDEN,
-    )
+    if not check_ateam_auth(db, ateam, current_user, models.ATeamAuthIntFlag.ADMIN):
+        raise NOT_HAVE_AUTH
 
     str_ids = [str(x.user_id) for x in requests]
     if len(set(str_ids)) != len(str_ids):
@@ -318,14 +321,22 @@ def update_ateam_auth(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
         if str_id in {str(MEMBER_UUID), str(NOT_MEMBER_UUID)}:
             continue
-        check_ateam_membership(db, ateam_id, str_id, on_error=status.HTTP_400_BAD_REQUEST)
-
+        if not (user := persistence.get_account_by_id(db, str_id)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid user id",
+            )
+        if not check_ateam_membership(ateam, user):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Not an ateam member",
+            )
     if not any(models.ATeamAuthEnum.ADMIN in x.authorities for x in requests):
         _guard_last_admin(db, ateam_id, str_ids)
 
     _modify_ateam_auth(
         db,
-        ateam_id,
+        ateam,
         [(x.user_id, models.ATeamAuthIntFlag.from_enums(x.authorities)) for x in requests],
     )
 
@@ -366,7 +377,7 @@ def get_ateam_auth(
             models.ATeamAuthority.ateam_id == str(ateam_id),
             (
                 true()
-                if check_ateam_membership(db, ateam_id, current_user.user_id)
+                if check_ateam_membership(ateam, current_user)
                 else models.ATeamAuthority.user_id == str(NOT_MEMBER_UUID)
             ),  # limit if not a member
         )
@@ -390,7 +401,8 @@ def get_ateam_members(
     ateam = persistence.get_ateam_by_id(db, ateam_id)
     if ateam is None:
         raise NO_SUCH_ATEAM
-    check_ateam_membership(db, ateam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
+    if not check_ateam_membership(ateam, current_user):
+        raise NOT_AN_ATEAM_MEMBER
 
     return ateam.members
 
@@ -429,16 +441,12 @@ def delete_member(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot remove pseudo account"
         )
     if current_user.user_id != str(user_id):
-        check_ateam_auth(
-            db,
-            ateam_id,
-            current_user.user_id,
-            models.ATeamAuthIntFlag.ADMIN,
-            on_error=status.HTTP_403_FORBIDDEN,
-        )
-    check_ateam_membership(db, ateam_id, user_id, on_error=status.HTTP_404_NOT_FOUND)
+        if not check_ateam_auth(db, ateam, current_user, models.ATeamAuthIntFlag.ADMIN):
+            raise NOT_HAVE_AUTH
+    if not check_ateam_membership(ateam, current_user):
+        raise NOT_AN_ATEAM_MEMBER
     _guard_last_admin(db, ateam_id, [user_id])
-    _modify_ateam_auth(db, ateam_id, [(user_id, 0)])
+    _modify_ateam_auth(db, ateam, [(user_id, 0)])
 
     ateam.members = [user for user in ateam.members if user.user_id != str(user_id)]
     db.add(ateam)
@@ -460,15 +468,10 @@ def create_invitation(
     ateam = persistence.get_ateam_by_id(db, ateam_id)
     if ateam is None:
         raise NO_SUCH_ATEAM
-    check_ateam_auth(
-        db,
-        ateam_id,
-        current_user.user_id,
-        models.ATeamAuthIntFlag.INVITE,
-        on_error=status.HTTP_403_FORBIDDEN,
-    )
+    if not check_ateam_auth(db, ateam, current_user, models.ATeamAuthIntFlag.INVITE):
+        raise NOT_HAVE_AUTH
     if data.authorities is not None and not check_ateam_auth(
-        db, ateam_id, current_user.user_id, models.ATeamAuthIntFlag.ADMIN
+        db, ateam, current_user, models.ATeamAuthIntFlag.ADMIN
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="ADMIN required to set authorities"
@@ -508,14 +511,8 @@ def list_invitation(
     ateam = persistence.get_ateam_by_id(db, ateam_id)
     if ateam is None:
         raise NO_SUCH_ATEAM
-    check_ateam_auth(
-        db,
-        ateam_id,
-        current_user.user_id,
-        models.ATeamAuthIntFlag.INVITE,
-        on_error=status.HTTP_403_FORBIDDEN,
-    )
-
+    if not check_ateam_auth(db, ateam, current_user, models.ATeamAuthIntFlag.INVITE):
+        raise NOT_HAVE_AUTH
     persistence.expire_ateam_invitations(db)
     db.commit()
 
@@ -535,15 +532,10 @@ def delete_invitation(
     """
     Invalidate invitation to ateam.
     """
-    if not persistence.get_ateam_by_id(db, ateam_id):
+    if not (ateam := persistence.get_ateam_by_id(db, ateam_id)):
         raise NO_SUCH_ATEAM
-    check_ateam_auth(
-        db,
-        ateam_id,
-        current_user.user_id,
-        models.ATeamAuthIntFlag.INVITE,
-        on_error=status.HTTP_403_FORBIDDEN,
-    )
+    if not check_ateam_auth(db, ateam, current_user, models.ATeamAuthIntFlag.INVITE):
+        raise NOT_HAVE_AUTH
     persistence.expire_ateam_invitations(db)
 
     # omit validating invitation to avoid raising error if already expired.
@@ -585,8 +577,8 @@ def get_watching_pteams(
     ateam = persistence.get_ateam_by_id(db, ateam_id)
     if ateam is None:
         raise NO_SUCH_ATEAM
-    check_ateam_membership(db, ateam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
-
+    if not check_ateam_membership(ateam, current_user):
+        raise NOT_AN_ATEAM_MEMBER
     return ateam.pteams
 
 
@@ -603,13 +595,8 @@ def remove_watching_pteam(
     ateam = persistence.get_ateam_by_id(db, ateam_id)
     if ateam is None:
         raise NO_SUCH_ATEAM
-    check_ateam_auth(
-        db,
-        ateam_id,
-        current_user.user_id,
-        models.ATeamAuthIntFlag.ADMIN,
-        on_error=status.HTTP_403_FORBIDDEN,
-    )
+    if not check_ateam_auth(db, ateam, current_user, models.ATeamAuthIntFlag.ADMIN):
+        raise NOT_HAVE_AUTH
 
     ateam.pteams = [pteam for pteam in ateam.pteams if pteam.pteam_id != str(pteam_id)]
     db.add(ateam)
@@ -628,15 +615,10 @@ def create_watching_request(
     """
     Create a new ateam watching request token.
     """
-    if not persistence.get_ateam_by_id(db, ateam_id):
+    if not (ateam := persistence.get_ateam_by_id(db, ateam_id)):
         raise NO_SUCH_ATEAM
-    check_ateam_auth(
-        db,
-        ateam_id,
-        current_user.user_id,
-        models.ATeamAuthIntFlag.ADMIN,
-        on_error=status.HTTP_403_FORBIDDEN,
-    )
+    if not check_ateam_auth(db, ateam, current_user, models.ATeamAuthIntFlag.ADMIN):
+        raise NOT_HAVE_AUTH
     if data.limit_count is not None and data.limit_count <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -669,13 +651,8 @@ def list_watching_request(
     ateam = persistence.get_ateam_by_id(db, ateam_id)
     if ateam is None:
         raise NO_SUCH_ATEAM
-    check_ateam_auth(
-        db,
-        ateam_id,
-        current_user.user_id,
-        models.ATeamAuthIntFlag.ADMIN,
-        on_error=status.HTTP_403_FORBIDDEN,
-    )
+    if not check_ateam_auth(db, ateam, current_user, models.ATeamAuthIntFlag.ADMIN):
+        raise NOT_HAVE_AUTH
 
     persistence.expire_ateam_watching_requests(db)
     db.commit()
@@ -692,15 +669,10 @@ def delete_watching_request(
     """
     Invalidate watching request.
     """
-    if not persistence.get_ateam_by_id(db, ateam_id):
+    if not (ateam := persistence.get_ateam_by_id(db, ateam_id)):
         raise NO_SUCH_ATEAM
-    check_ateam_auth(
-        db,
-        ateam_id,
-        current_user.user_id,
-        models.ATeamAuthIntFlag.ADMIN,
-        on_error=status.HTTP_403_FORBIDDEN,
-    )
+    if not check_ateam_auth(db, ateam, current_user, models.ATeamAuthIntFlag.ADMIN):
+        raise NOT_HAVE_AUTH
     persistence.expire_ateam_watching_requests(db)
 
     # omit validating request to avoid raising error if already expired.
@@ -755,10 +727,10 @@ def get_topic_status(
     - Empty string as **search** will be ignored.
     - The secondary sort key is updated_at_desc or threat_impact.
     """
-    if not persistence.get_ateam_by_id(db, ateam_id):
+    if not (ateam := persistence.get_ateam_by_id(db, ateam_id)):
         raise NO_SUCH_ATEAM
-    check_ateam_membership(db, ateam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
-
+    if not check_ateam_membership(ateam, current_user):
+        raise NOT_AN_ATEAM_MEMBER
     # ignore empty search.
     search = search if search else None
 
@@ -917,10 +889,11 @@ def get_topic_comments(
     """
     Get ateam topic comments.
     """
-    if not persistence.get_ateam_by_id(db, ateam_id):
+    if not (ateam := persistence.get_ateam_by_id(db, ateam_id)):
         raise NO_SUCH_ATEAM
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
-    check_ateam_membership(db, ateam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
+    if not check_ateam_membership(ateam, current_user):
+        raise NOT_AN_ATEAM_MEMBER
     return command.get_atema_topic_comments(db, ateam_id, topic_id)
 
 
@@ -937,10 +910,11 @@ def add_topic_comment(
     """
     Add ateam topic comment.
     """
-    if not persistence.get_ateam_by_id(db, ateam_id):
+    if not (ateam := persistence.get_ateam_by_id(db, ateam_id)):
         raise NO_SUCH_ATEAM
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
-    check_ateam_membership(db, ateam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
+    if not check_ateam_membership(ateam, current_user):
+        raise NOT_AN_ATEAM_MEMBER
     new_comment = models.ATeamTopicComment(
         topic_id=str(topic_id),
         ateam_id=str(ateam_id),
@@ -997,20 +971,15 @@ def delete_topic_comment(
     """
     Delete ateam topic comment.
     """
-    if not persistence.get_ateam_by_id(db, ateam_id):
+    if not (ateam:=persistence.get_ateam_by_id(db, ateam_id)):
         raise NO_SUCH_ATEAM
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
     comment = persistence.get_ateam_topic_comment_by_id(db, comment_id)
     if not comment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such comment")
     if comment.user_id != current_user.user_id:
-        check_ateam_auth(
-            db,
-            ateam_id,
-            current_user.user_id,
-            models.ATeamAuthIntFlag.ADMIN,
-            on_error=status.HTTP_403_FORBIDDEN,
-        )
+        if not check_ateam_auth(db, ateam, current_user, models.ATeamAuthIntFlag.ADMIN):
+            raise NOT_HAVE_AUTH
     persistence.delete_ateam_topic_comment(db, comment)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
