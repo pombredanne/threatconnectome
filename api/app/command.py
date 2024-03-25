@@ -2,11 +2,40 @@ from datetime import datetime
 from typing import Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Row, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import and_, func
 
 from app import models, persistence, schemas
+
+
+def get_atema_topic_comments(
+    db: Session, ateam_id: UUID | str, topic_id: UUID | str
+) -> list[Row[tuple[str, str, str, str, datetime, datetime | None, str, str | None]]]:
+    return (
+        db.query(
+            models.ATeamTopicComment.comment_id,
+            models.ATeamTopicComment.topic_id,
+            models.ATeamTopicComment.ateam_id,
+            models.ATeamTopicComment.user_id,
+            models.ATeamTopicComment.created_at,
+            models.ATeamTopicComment.updated_at,
+            models.ATeamTopicComment.comment,
+            models.Account.email,
+        )
+        .join(
+            models.Account,
+            models.Account.user_id == models.ATeamTopicComment.user_id,
+        )
+        .filter(
+            models.ATeamTopicComment.ateam_id == str(ateam_id),
+            models.ATeamTopicComment.topic_id == str(topic_id),
+        )
+        .order_by(
+            models.ATeamTopicComment.created_at.desc(),
+        )
+        .all()
+    )
 
 
 def get_pteam_tag_ids(db: Session, pteam_id: UUID | str) -> Sequence[str]:

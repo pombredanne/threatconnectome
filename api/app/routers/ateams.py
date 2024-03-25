@@ -8,7 +8,7 @@ from sqlalchemy import and_, nullsfirst, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import true
 
-from app import models, persistence, schemas
+from app import command, models, persistence, schemas
 from app.auth import get_current_user
 from app.common import (
     check_ateam_auth,
@@ -950,30 +950,7 @@ def get_topic_comments(
     validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
     check_ateam_membership(db, ateam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
-    return (
-        db.query(
-            models.ATeamTopicComment.comment_id,
-            models.ATeamTopicComment.topic_id,
-            models.ATeamTopicComment.ateam_id,
-            models.ATeamTopicComment.user_id,
-            models.ATeamTopicComment.created_at,
-            models.ATeamTopicComment.updated_at,
-            models.ATeamTopicComment.comment,
-            models.Account.email,
-        )
-        .join(
-            models.Account,
-            models.Account.user_id == models.ATeamTopicComment.user_id,
-        )
-        .filter(
-            models.ATeamTopicComment.ateam_id == str(ateam_id),
-            models.ATeamTopicComment.topic_id == str(topic_id),
-        )
-        .order_by(
-            models.ATeamTopicComment.created_at.desc(),
-        )
-        .all()
-    )
+    return command.get_atema_topic_comments(db, ateam_id, topic_id)
 
 
 @router.post(
@@ -992,16 +969,16 @@ def add_topic_comment(
     validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
     check_ateam_membership(db, ateam_id, current_user.user_id, on_error=status.HTTP_403_FORBIDDEN)
-    comment = models.ATeamTopicComment(
+    new_comment = models.ATeamTopicComment(
         topic_id=str(topic_id),
         ateam_id=str(ateam_id),
         user_id=str(current_user.user_id),
         comment=data.comment,
         created_at=datetime.now(),
     )
-    db.add(comment)
+    comment = persistence.create_ateam_topic_comment(db, new_comment)
     db.commit()
-    db.refresh(comment)
+    db.refresh(comment)  # comment.__dict__ has to refresh
     return {**comment.__dict__, "email": current_user.email}
 
 
@@ -1022,20 +999,13 @@ def update_topic_comment(
     """
     validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
-    comment = (
-        db.query(models.ATeamTopicComment)
-        .filter(
-            models.ATeamTopicComment.comment_id == str(comment_id),
-        )
-        .one_or_none()
-    )
+    comment = persistence.get_ateam_topic_comment_by_id(db, comment_id)
     if not comment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such comment")
     if comment.user_id != current_user.user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your comment")
     comment.comment = data.comment
     comment.updated_at = datetime.now()
-    db.add(comment)
     db.commit()
     db.refresh(comment)
     return {**comment.__dict__, "email": current_user.email}
@@ -1056,13 +1026,7 @@ def delete_topic_comment(
     """
     validate_ateam(db, ateam_id, on_error=status.HTTP_404_NOT_FOUND)
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
-    comment = (
-        db.query(models.ATeamTopicComment)
-        .filter(
-            models.ATeamTopicComment.comment_id == str(comment_id),
-        )
-        .one_or_none()
-    )
+    comment = persistence.get_ateam_topic_comment_by_id(db, comment_id)
     if not comment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such comment")
     if comment.user_id != current_user.user_id:
@@ -1073,6 +1037,6 @@ def delete_topic_comment(
             models.ATeamAuthIntFlag.ADMIN,
             on_error=status.HTTP_403_FORBIDDEN,
         )
-    db.delete(comment)
+    persistence.delete_ateam_topic_comment(db, comment)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

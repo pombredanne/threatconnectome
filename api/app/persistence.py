@@ -84,6 +84,30 @@ def expire_ateam_invitations(db: Session) -> None:
     db.flush()
 
 
+def create_ateam_topic_comment(
+    db: Session, comment: models.ATeamTopicComment
+) -> models.ATeamTopicComment:
+    db.add(comment)
+    db.flush()
+    db.refresh(comment)
+    return comment
+
+
+def delete_ateam_topic_comment(db: Session, comment: models.ATeamTopicComment) -> None:
+    db.delete(comment)
+    db.flush()
+
+
+def get_ateam_topic_comment_by_id(
+    db: Session, comment_id: UUID | str
+) -> models.ATeamTopicComment | None:
+    return db.scalars(
+        select(models.ATeamTopicComment).where(
+            models.ATeamTopicComment.comment_id == str(comment_id)
+        )
+    ).one_or_none()
+
+
 ### PTeam
 
 
