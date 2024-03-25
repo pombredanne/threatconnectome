@@ -437,6 +437,9 @@ def get_pteam_auth(
     return response
 
 
+# FIXME!
+# following get_pteamtag() has no tests!!!
+#
 @router.get("/{pteam_id}/tags/{tag_id}", response_model=schemas.PTeamtagExtResponse)
 def get_pteamtag(
     pteam_id: UUID,
@@ -456,12 +459,7 @@ def get_pteamtag(
     if tag not in {ref.tag for ref in pteam.references}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
 
-    ptrs = db.scalars(
-        select(models.PTeamTagReference).where(
-            models.PTeamTagReference.pteam_id == str(pteam_id),
-            models.PTeamTagReference.tag_id == str(tag_id),
-        )
-    ).all()
+    ptrs = persistence.get_pteam_tag_references_by_tag_id(db, pteam_id, tag_id)
     references = [
         {
             "group": ptr.group,
@@ -471,14 +469,8 @@ def get_pteamtag(
         for ptr in ptrs
     ]
 
-    last_updated_at = (
-        db.query(func.max(models.CurrentPTeamTopicTagStatus.updated_at))
-        .filter(
-            models.CurrentPTeamTopicTagStatus.pteam_id == str(pteam_id),
-            models.CurrentPTeamTopicTagStatus.tag_id == str(tag_id),
-            models.CurrentPTeamTopicTagStatus.topic_status != models.TopicStatusType.completed,
-        )
-        .scalar()
+    last_updated_at = command.get_last_updated_at_in_current_pteam_topic_tag_status(
+        db, pteam_id, tag_id
     )
 
     return {

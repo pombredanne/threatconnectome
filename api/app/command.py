@@ -220,3 +220,17 @@ def check_tag_is_related_to_topic(db: Session, tag: models.Tag, topic: models.To
         .first()
     )
     return row is not None and row.TopicTag is not None
+
+
+def get_last_updated_at_in_current_pteam_topic_tag_status(
+    db: Session,
+    pteam_id: UUID | str,
+    tag_id: UUID | str,
+) -> datetime | None:
+    return db.scalars(
+        select(func.max(models.CurrentPTeamTopicTagStatus.updated_at)).where(
+            models.CurrentPTeamTopicTagStatus.pteam_id == str(pteam_id),
+            models.CurrentPTeamTopicTagStatus.tag_id == str(tag_id),
+            models.CurrentPTeamTopicTagStatus.topic_status != models.TopicStatusType.completed,
+        )
+    ).one()
