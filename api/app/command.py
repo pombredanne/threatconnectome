@@ -234,3 +234,18 @@ def get_last_updated_at_in_current_pteam_topic_tag_status(
             models.CurrentPTeamTopicTagStatus.topic_status != models.TopicStatusType.completed,
         )
     ).one()
+
+
+def get_pteam_reference_versions_of_each_tags(
+    db: Session,
+    pteam_id: UUID | str,
+) -> dict[str, set[str]]:  # {tag_id: {version, ...}}
+    rows = db.execute(
+        select(
+            models.PTeamTagReference.tag_id,
+            func.array_agg(models.PTeamTagReference.version).label("versions"),
+        )
+        .where(models.PTeamTagReference.pteam_id == str(pteam_id))
+        .group_by(models.PTeamTagReference.tag_id)
+    )
+    return {row.tag_id: set(row.versions) for row in rows}

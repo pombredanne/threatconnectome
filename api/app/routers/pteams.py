@@ -1,13 +1,11 @@
 import json
 from datetime import datetime
-from typing import Dict, List, Set
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy.sql.expression import func
 
 from app import command, models, persistence, schemas
 from app.auth import get_current_user
@@ -15,7 +13,6 @@ from app.common import (
     auto_close_by_pteamtags,
     check_pteam_auth,
     check_pteam_membership,
-    check_tags_exist,
     fix_current_status_by_pteam,
     get_current_pteam_topic_tag_status,
     get_or_create_topic_tag,
@@ -47,7 +44,7 @@ NO_SUCH_PTEAM = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No 
 NO_SUCH_TAG = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such tag")
 
 
-@router.get("", response_model=List[schemas.PTeamEntry])
+@router.get("", response_model=list[schemas.PTeamEntry])
 def get_pteams(
     current_user: models.Account = Depends(get_current_user), db: Session = Depends(get_db)
 ):
@@ -163,7 +160,7 @@ def get_pteam_groups(
     return {"groups": groups}
 
 
-@router.get("/{pteam_id}/tags", response_model=List[schemas.ExtTagResponse])
+@router.get("/{pteam_id}/tags", response_model=list[schemas.ExtTagResponse])
 def get_pteam_tags(
     pteam_id: UUID,
     current_user: models.Account = Depends(get_current_user),
@@ -259,7 +256,7 @@ def get_pteam_tagged_unsolved_topic_ids(
     }
 
 
-@router.get("/{pteam_id}/topics", response_model=List[schemas.TopicResponse])
+@router.get("/{pteam_id}/topics", response_model=list[schemas.TopicResponse])
 def get_pteam_topics(
     pteam_id: UUID,
     current_user: models.Account = Depends(get_current_user),
@@ -338,10 +335,10 @@ def create_pteam(
     return pteam
 
 
-@router.post("/{pteam_id}/authority", response_model=List[schemas.PTeamAuthResponse])
+@router.post("/{pteam_id}/authority", response_model=list[schemas.PTeamAuthResponse])
 def update_pteam_auth(
     pteam_id: UUID,
-    requests: List[schemas.PTeamAuthRequest],
+    requests: list[schemas.PTeamAuthRequest],
     current_user: models.Account = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -408,7 +405,7 @@ def update_pteam_auth(
     return response
 
 
-@router.get("/{pteam_id}/authority", response_model=List[schemas.PTeamAuthResponse])
+@router.get("/{pteam_id}/authority", response_model=list[schemas.PTeamAuthResponse])
 def get_pteam_auth(
     pteam_id: UUID,
     current_user: models.Account = Depends(get_current_user),
@@ -514,24 +511,7 @@ def _json_loads(s: str | bytes | bytearray):
         ) from error
 
 
-def remove_specified_group_references_from_pteamtag(db, pteamtag, group):
-    """
-    Delete specified group's references from pteamtag
-    """
-    pteamtag.references = [
-        reference for reference in pteamtag.references if reference["group"] != group
-    ]
-    # Note: This fuc deletes pteamtag when reference become empty.
-    #       This specification is different from update_pteamtag.
-    # If reference become empty, delete pteamtag
-    if len(pteamtag.references) == 0:
-        db.delete(pteamtag)
-    # If reference remains, update pteamtag
-    else:
-        db.add(pteamtag)
-
-
-@router.post("/{pteam_id}/upload_sbom_file", response_model=List[schemas.ExtTagResponse])
+@router.post("/{pteam_id}/upload_sbom_file", response_model=list[schemas.ExtTagResponse])
 def upload_pteam_sbom_file(
     pteam_id: UUID,
     file: UploadFile,
@@ -561,7 +541,7 @@ def upload_pteam_sbom_file(
 
     try:
         json_lines = sbom_json_to_artifact_json_lines(jdata)
-        return apply_group_tags(
+        ret = apply_group_tags(
             db,
             pteam,
             group,
@@ -572,8 +552,12 @@ def upload_pteam_sbom_file(
     except ValueError as err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err))
 
+    db.commit()
 
-@router.post("/{pteam_id}/upload_tags_file", response_model=List[schemas.ExtTagResponse])
+    return ret
+
+
+@router.post("/{pteam_id}/upload_tags_file", response_model=list[schemas.ExtTagResponse])
 def upload_pteam_tags_file(
     pteam_id: UUID,
     file: UploadFile,
@@ -602,23 +586,28 @@ def upload_pteam_tags_file(
         json_lines.append(_json_loads(bline))
 
     try:
-        return apply_group_tags(
+        ret = apply_group_tags(
             db, pteam, group, json_lines, auto_create_tags=force_mode, auto_close=True
         )
     except ValueError as err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err))
+
+    db.commit()
+
+    return ret
 
 
 def apply_group_tags(
     db: Session,
     pteam: models.PTeam,
     group: str,
-    json_lines: List[dict],
+    json_lines: list[dict],
     auto_create_tags=False,
     auto_close=False,
-) -> List[schemas.ExtTagResponse]:
+) -> list[schemas.ExtTagResponse]:
     # Check file format and get tag_names
-    tag_names_in_file: Set[str] = set()
+    tag_name_to_id: dict[str, str] = {}
+    missing_tags = set()
     for line in json_lines:
         if not (_tag_name := line.get("tag_name")):
             raise ValueError("Missing tag_name")
@@ -626,65 +615,39 @@ def apply_group_tags(
             raise ValueError("Missing references")
         if any(None in {_ref.get("target"), _ref.get("version")} for _ref in _refs):
             raise ValueError("Missing target and|or version")
-        tag_names_in_file.add(_tag_name)
+        if not (_tag := persistence.get_tag_by_name(db, _tag_name)):
+            if auto_create_tags:
+                _tag = get_or_create_topic_tag(db, _tag_name)  # FIXME!!
+            else:
+                missing_tags.add(_tag_name)
+        if _tag:
+            tag_name_to_id[_tag.tag_name] = _tag.tag_id
+    if missing_tags:
+        raise ValueError(f"No such tags: {', '.join(sorted(missing_tags))}")
 
-    # If force_mode is False, check whether tag_names exist in DB
-    if auto_create_tags is False:
-        check_tags_exist(db, list(tag_names_in_file))
-    tag_name_to_id: Dict[str, str] = {
-        tag_name: get_or_create_topic_tag(db, tag_name).tag_id for tag_name in tag_names_in_file
-    }
     if auto_close:
-        get_versions_query = (
-            select(
-                models.PTeamTagReference.tag_id,
-                func.array_agg(models.PTeamTagReference.version).label("versions"),
-            )
-            .where(models.PTeamTagReference.pteam_id == pteam.pteam_id)
-            .group_by(models.PTeamTagReference.tag_id)
-        )
-        old_version_rows = db.execute(get_versions_query).all()
-        old_versions: Dict[str, Set[str]] = {
-            row_.tag_id: set(row_.versions) for row_ in old_version_rows
-        }
+        old_versions = command.get_pteam_reference_versions_of_each_tags(db, pteam.pteam_id)
 
-    db.execute(
-        delete(models.PTeamTagReference).where(
-            models.PTeamTagReference.pteam_id == pteam.pteam_id,
-            models.PTeamTagReference.group == group,
-        )
-    )
-    new_params = {
-        (tag_name_to_id[json_line["tag_name"]], refs.get("target", ""), refs.get("version", ""))
-        for json_line in json_lines
-        for refs in json_line.get("references", [{"target": "", "version": ""}])
-    }
-    db.add_all(
-        [
-            models.PTeamTagReference(
+    # remove all current references of the group
+    for ptr in persistence.get_pteam_tag_references(db, pteam.pteam_id):
+        if ptr.group == group:
+            persistence.delete_pteam_tag_reference(db, ptr)
+    # create new references from json_lines
+    for json_line in json_lines:
+        for ref in json_line.get("references", [{"target": "", "version": ""}]):
+            ptr = models.PTeamTagReference(
                 pteam_id=pteam.pteam_id,
                 group=group,
-                tag_id=new_param[0],
-                target=new_param[1],
-                version=new_param[2],
+                tag_id=tag_name_to_id[json_line["tag_name"]],
+                target=ref.get("target", ""),
+                version=ref.get("version", ""),
             )
-            for new_param in new_params
-        ]
-    )
+            persistence.create_pteam_tag_reference(db, ptr)
 
     # try auto close if make sense
     if auto_close:
-        db.flush()
-        new_version_rows = db.execute(get_versions_query).all()
-        new_versions: Dict[str, Set[str]] = {
-            row_.tag_id: set(row_.versions) for row_ in new_version_rows
-        }
-
-        ptrs = db.scalars(
-            select(models.PTeamTagReference)
-            .options(joinedload(models.PTeamTagReference.tag, innerjoin=True))
-            .where(models.PTeamTagReference.pteam_id == pteam.pteam_id)
-        ).all()
+        new_versions = command.get_pteam_reference_versions_of_each_tags(db, pteam.pteam_id)
+        ptrs = persistence.get_pteam_tag_references(db, pteam.pteam_id)
         if ptrs_for_auto_close := [
             ptr
             for ptr in ptrs
@@ -692,11 +655,8 @@ def apply_group_tags(
         ]:
             auto_close_by_pteamtags(db, [(pteam, ptr.tag) for ptr in ptrs_for_auto_close])
 
-    db.flush()
-    db.refresh(pteam)
     fix_current_status_by_pteam(db, pteam)
 
-    db.commit()
     return command.get_pteam_ext_tags(db, pteam)
 
 
@@ -878,7 +838,7 @@ def get_pteam_topic_statuses_summary(
     return _get_pteam_topic_statuses_summary(db, pteam, tag)
 
 
-@router.get("/{pteam_id}/topicstatus", response_model=List[schemas.TopicStatusResponse])
+@router.get("/{pteam_id}/topicstatus", response_model=list[schemas.TopicStatusResponse])
 def get_pteam_topic_status_list(
     pteam_id: UUID,
     current_user: models.Account = Depends(get_current_user),
@@ -992,7 +952,7 @@ def get_pteam_topic_status(
     return pteam_topic_tag_status_to_response(db, current_row)
 
 
-@router.get("/{pteam_id}/members", response_model=List[schemas.UserResponse])
+@router.get("/{pteam_id}/members", response_model=list[schemas.UserResponse])
 def get_pteam_members(
     pteam_id: UUID,
     current_user: models.Account = Depends(get_current_user),
@@ -1096,14 +1056,14 @@ def create_invitation(
     )
 
 
-@router.get("/{pteam_id}/invitation", response_model=List[schemas.PTeamInvitationResponse])
+@router.get("/{pteam_id}/invitation", response_model=list[schemas.PTeamInvitationResponse])
 def list_invitations(
     pteam_id: UUID,
     current_user: models.Account = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    List effective invitations.
+    list effective invitations.
     """
     if not (pteam := persistence.get_pteam_by_id(db, pteam_id)) or pteam.disabled:
         raise NO_SUCH_PTEAM
@@ -1143,7 +1103,7 @@ def delete_invitation(
     return Response(status_code=status.HTTP_204_NO_CONTENT)  # avoid Content-Length Header
 
 
-@router.get("/{pteam_id}/watchers", response_model=List[schemas.ATeamEntry])
+@router.get("/{pteam_id}/watchers", response_model=list[schemas.ATeamEntry])
 def get_pteam_watchers(
     pteam_id: UUID,
     current_user: models.Account = Depends(get_current_user),

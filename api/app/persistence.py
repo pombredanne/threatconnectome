@@ -128,6 +128,21 @@ def get_pteam_tag_references(
     ).all()
 
 
+def create_pteam_tag_reference(
+    db: Session,
+    ptr: models.PTeamTagReference,
+) -> models.PTeamTagReference:
+    db.add(ptr)
+    db.flush()
+    db.refresh(ptr)
+    return ptr
+
+
+def delete_pteam_tag_reference(db: Session, ptr: models.PTeamTagReference):
+    db.delete(ptr)
+    db.flush()
+
+
 def get_pteam_tag_references_by_tag_id(
     db: Session,
     pteam_id: UUID | str,
