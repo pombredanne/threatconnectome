@@ -725,38 +725,20 @@ def update_pteam(
         pteam.disabled = data.disabled
     if data.alert_mail is not None:
         pteam.alert_mail = models.PTeamMail(**data.alert_mail.__dict__)
-
-    db.add(pteam)
+    db.flush()
 
     if pteam.disabled:
-        db.query(models.PTeamInvitation).filter(
-            models.PTeamInvitation.pteam_id == str(pteam_id)
-        ).delete()
+        for invitation in persistence.get_pteam_invitations(db, pteam_id):
+            persistence.delete_pteam_invitation(db, invitation)
     elif need_auto_close:
-        db.flush()
-        pteamtags = db.execute(
-            select(
-                models.PTeamTagReference.tag_id.distinct(),
-                models.PTeam,
-                models.Tag,
-            )
-            .join(
-                models.PTeam,
-                and_(
-                    models.PTeam.pteam_id == pteam.pteam_id,
-                    models.PTeamTagReference.pteam_id == pteam.pteam_id,
-                ),
-            )
-            .join(models.Tag)
-        ).all()
-        auto_close_by_pteamtags(db, [(pteamtag.PTeam, pteamtag.Tag) for pteamtag in pteamtags])
+        ptrs = persistence.get_pteam_tag_references(db, pteam.pteam_id)
+        ptr_dict = {ptr.tag_id: ptr.tag for ptr in ptrs}  # pick only 1 tag for each tag_id
+        auto_close_by_pteamtags(db, [(pteam, tag) for tag in ptr_dict.values()])
 
-    db.flush()
-    db.refresh(pteam)
     fix_current_status_by_pteam(db, pteam)
 
     db.commit()
-    db.refresh(pteam)
+
     return pteam
 
 

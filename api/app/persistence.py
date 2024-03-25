@@ -93,6 +93,15 @@ def get_pteam_groups(db: Session, pteam_id: UUID | str) -> Sequence[str]:
     ).all()
 
 
+def get_pteam_invitations(
+    db: Session,
+    pteam_id: UUID | str,
+) -> Sequence[models.PTeamInvitation]:
+    return db.scalars(
+        select(models.PTeamInvitation).where(models.PTeamInvitation.pteam_id == str(pteam_id))
+    ).all()
+
+
 def get_pteam_invitation_by_id(
     db: Session,
     invitation_id: UUID | str,
@@ -102,6 +111,24 @@ def get_pteam_invitation_by_id(
             models.PTeamInvitation.invitation_id == str(invitation_id)
         )
     ).one_or_none()
+
+
+def create_pteam_invitation(
+    db: Session,
+    invitation: models.PTeamInvitation,
+) -> models.PTeamInvitation:
+    db.add(invitation)
+    db.flush()
+    db.refresh(invitation)
+    return invitation
+
+
+def delete_pteam_invitation(
+    db: Session,
+    invitation: models.PTeamInvitation,
+):
+    db.delete(invitation)
+    db.flush()
 
 
 def expire_pteam_invitations(db: Session) -> None:
