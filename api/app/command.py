@@ -4,7 +4,7 @@ from uuid import UUID
 
 from sqlalchemy import Row, select
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.expression import and_, func
+from sqlalchemy.sql.expression import and_, func, or_
 
 from app import models, persistence, schemas
 
@@ -342,3 +342,59 @@ def get_pteam_reference_versions_of_each_tags(
         .group_by(models.PTeamTagReference.tag_id)
     )
     return {row.tag_id: set(row.versions) for row in rows}
+
+
+def get_auto_close_triable_pteam_tags_and_topics(
+    db: Session,
+    pteam: models.PTeam,
+) -> list[tuple[models.Tag, models.Topic]]:
+    rows = db.scalars(
+        select(models.CurrentPTeamTopicTagStatus)
+        .outerjoin(models.PTeamTopicTagStatus)
+        .where(
+            models.CurrentPTeamTopicTagStatus.pteam_id == pteam.pteam_id,
+            or_(
+                models.CurrentPTeamTopicTagStatus.topic_status.in_(
+                    [
+                        models.TopicStatusType.alerted,
+                        models.TopicStatusType.acknowledged,
+                    ]
+                ),
+                and_(
+                    models.PTeamTopicTagStatus.topic_status == models.TopicStatusType.scheduled,
+                    models.PTeamTopicTagStatus.scheduled_at < datetime.now(),
+                ),
+            ),
+        )
+    ).all()
+
+    return [(row.tag, row.topic) for row in rows]
+
+
+def get_auto_close_triable_pteam_topics(
+    db: Session,
+    pteam: models.PTeam,
+    tag: models.Tag,  # should be PTeamTag, not TopicTag
+) -> list[models.Topic]:
+    rows = db.scalars(
+        select(models.CurrentPTeamTopicTagStatus)
+        .outerjoin(models.PTeamTopicTagStatus)
+        .where(
+            models.CurrentPTeamTopicTagStatus.pteam_id == pteam.pteam_id,
+            models.CurrentPTeamTopicTagStatus.tag_id == tag.tag_id,
+            or_(
+                models.CurrentPTeamTopicTagStatus.topic_status.in_(
+                    [
+                        models.TopicStatusType.alerted,
+                        models.TopicStatusType.acknowledged,
+                    ]
+                ),
+                and_(
+                    models.PTeamTopicTagStatus.topic_status == models.TopicStatusType.scheduled,
+                    models.PTeamTopicTagStatus.scheduled_at < datetime.now(),
+                ),
+            ),
+        )
+    ).all()
+
+    return [row.topic for row in rows]

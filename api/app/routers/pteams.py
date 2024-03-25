@@ -1,11 +1,10 @@
 import json
-from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
-from sqlalchemy import and_, delete, or_, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import delete
+from sqlalchemy.orm import Session
 
 from app import command, models, persistence, schemas
 from app.auth import get_current_user
@@ -1073,34 +1072,8 @@ def fix_status_mismatch(
     if not check_pteam_membership(db, pteam, current_user):
         raise NOT_A_PTEAM_MEMBER
 
-    select_stmt = (
-        select(models.CurrentPTeamTopicTagStatus)
-        .options(
-            joinedload(models.CurrentPTeamTopicTagStatus.pteam, innerjoin=True),
-            joinedload(models.CurrentPTeamTopicTagStatus.tag, innerjoin=True),
-            joinedload(models.CurrentPTeamTopicTagStatus.topic, innerjoin=True),
-        )
-        .outerjoin(models.PTeamTopicTagStatus)
-        .where(
-            models.CurrentPTeamTopicTagStatus.pteam_id == str(pteam_id),
-            or_(
-                models.CurrentPTeamTopicTagStatus.topic_status.in_(
-                    [
-                        models.TopicStatusType.alerted,
-                        models.TopicStatusType.acknowledged,
-                    ]
-                ),
-                and_(
-                    models.PTeamTopicTagStatus.topic_status == models.TopicStatusType.scheduled,
-                    models.PTeamTopicTagStatus.scheduled_at < datetime.now(),
-                ),
-            ),
-        )
-    )
-
-    rows = db.scalars(select_stmt).all()
-    for row in rows:
-        pteamtag_try_auto_close_topic(db, row.pteam, row.tag, row.topic)
+    for tag, topic in command.get_auto_close_triable_pteam_tags_and_topics(db, pteam):
+        pteamtag_try_auto_close_topic(db, pteam, tag, topic)
 
     return Response(status_code=status.HTTP_200_OK)
 
@@ -1121,35 +1094,7 @@ def fix_status_mismatch_tag(
     if tag not in {ref.tag for ref in pteam.references}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
 
-    select_stmt = (
-        select(models.CurrentPTeamTopicTagStatus)
-        .options(
-            joinedload(models.CurrentPTeamTopicTagStatus.pteam, innerjoin=True),
-            joinedload(models.CurrentPTeamTopicTagStatus.tag, innerjoin=True),
-            joinedload(models.CurrentPTeamTopicTagStatus.topic, innerjoin=True),
-        )
-        .outerjoin(models.PTeamTopicTagStatus)
-        .where(
-            models.CurrentPTeamTopicTagStatus.pteam_id == str(pteam_id),
-            models.CurrentPTeamTopicTagStatus.tag_id == str(tag_id),
-            or_(
-                models.CurrentPTeamTopicTagStatus.topic_status.in_(
-                    [
-                        models.TopicStatusType.alerted,
-                        models.TopicStatusType.acknowledged,
-                    ]
-                ),
-                and_(
-                    models.PTeamTopicTagStatus.topic_status == models.TopicStatusType.scheduled,
-                    models.PTeamTopicTagStatus.scheduled_at < datetime.now(),
-                ),
-            ),
-        )
-    )
-
-    rows = db.scalars(select_stmt).all()
-
-    for row in rows:
-        pteamtag_try_auto_close_topic(db, row.pteam, row.tag, row.topic)
+    for topic in command.get_auto_close_triable_pteam_topics(db, pteam, tag):
+        pteamtag_try_auto_close_topic(db, pteam, tag, topic)
 
     return Response(status_code=status.HTTP_200_OK)
