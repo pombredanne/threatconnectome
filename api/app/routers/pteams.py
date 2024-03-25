@@ -985,12 +985,11 @@ def list_invitations(
     persistence.expire_pteam_invitations(db)
 
     return [
-        schemas.PTeamInvitationResponse(
-            **row.__dict__, authorities=models.PTeamAuthIntFlag(row.authority).to_enums()
-        )
-        for row in db.query(models.PTeamInvitation)
-        .filter(models.PTeamInvitation.pteam_id == str(pteam_id))
-        .all()
+        {
+            **invitation.__dict__,
+            "authorities": models.PTeamAuthIntFlag(invitation.authority).to_enums(),
+        }
+        for invitation in persistence.get_pteam_invitations(db, pteam_id)
     ]
 
 
