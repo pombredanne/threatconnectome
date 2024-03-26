@@ -9,7 +9,7 @@ from sqlalchemy.sql.expression import and_, func, or_
 from app import models, persistence, schemas
 
 
-def get_atema_topic_comments(
+def get_ateam_topic_comments(
     db: Session, ateam_id: UUID | str, topic_id: UUID | str
 ) -> list[Row[tuple[str, str, str, str, datetime, datetime | None, str, str | None]]]:
     return (

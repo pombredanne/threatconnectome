@@ -894,7 +894,7 @@ def get_topic_comments(
     validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
     if not check_ateam_membership(ateam, current_user):
         raise NOT_AN_ATEAM_MEMBER
-    return command.get_atema_topic_comments(db, ateam_id, topic_id)
+    return command.get_ateam_topic_comments(db, ateam_id, topic_id)
 
 
 @router.post(
