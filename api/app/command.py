@@ -681,3 +681,35 @@ def search_topics_internal(
         "topics": topics,
     }
     return result
+
+
+### Artifact Tag
+
+
+def get_num_of_child_tags(db: Session, tag: models.Tag) -> int:
+    return (
+        db.query(models.Tag)
+        .filter(
+            models.Tag.parent_id == tag.tag_id,
+            models.Tag.tag_id != tag.tag_id,
+        )
+        .count()
+    )
+
+
+def get_num_of_tags_by_tag_id_of_pteam_tag_reference(
+    db: Session,
+    tag_id: UUID,
+) -> int:
+    return (
+        db.query(models.PTeamTagReference)
+        .filter(models.PTeamTagReference.tag_id == str(tag_id))
+        .count()
+    )
+
+
+def get_num_of_tags_by_tag_id_of_topic_tag(
+    db: Session,
+    tag_id: UUID,
+) -> int:
+    return db.query(models.TopicTag).filter(models.TopicTag.tag_id == str(tag_id)).count()

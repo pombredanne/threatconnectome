@@ -4,10 +4,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi import Query as QueryParameter
 from fastapi.responses import Response
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import models, schemas
+from app import command, models, persistence, schemas
 from app.auth import get_current_user
 from app.common import get_or_create_topic_tag, validate_tag
 from app.database import get_db
@@ -37,7 +37,7 @@ def create_tag(
     """
     Create a tag (and parent tag if not exist).
     """
-    if db.query(models.Tag).filter(models.Tag.tag_name == request.tag_name).one_or_none():
+    if persistence.get_tag_by_name(db, request.tag_name):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Already exists")
     return get_or_create_topic_tag(db, request.tag_name)
 
@@ -54,13 +54,10 @@ def search_tags(
     """
     # If no words were provided, return all tags.
     if words is None:
-        return db.query(models.Tag).all()
+        return persistence.get_all_tags(db)
 
     # Otherwise, search for tags that match the provided words.
-    query = db.query(models.Tag).filter(
-        models.Tag.tag_name.bool_op("@@")(func.to_tsquery("|".join(words)))
-    )
-    return query.all()
+    return persistence.search_tags(db, words)
 
 
 @router.delete("/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -75,14 +72,7 @@ def delete_tag(
     tag = validate_tag(db, tag_id=tag_id, on_error=status.HTTP_404_NOT_FOUND)
     assert tag
 
-    num_of_child_tags = (
-        db.query(models.Tag)
-        .filter(
-            models.Tag.parent_id == tag.tag_id,
-            models.Tag.tag_id != tag.tag_id,
-        )
-        .count()
-    )
+    num_of_child_tags = command.get_num_of_child_tags(db, tag)
     has_child_tags = num_of_child_tags > 0
     if has_child_tags:
         raise HTTPException(
@@ -91,16 +81,13 @@ def delete_tag(
         )
 
     if (
-        db.query(models.PTeamTagReference)
-        .filter(models.PTeamTagReference.tag_id == str(tag_id))
-        .count()
-        > 0
-        or db.query(models.TopicTag).filter(models.TopicTag.tag_id == str(tag_id)).count() > 0
+        command.get_num_of_tags_by_tag_id_of_pteam_tag_reference(db, tag_id) > 0
+        or command.get_num_of_tags_by_tag_id_of_topic_tag(db, tag_id) > 0
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Requested tag is in use"
         )
 
-    db.delete(tag)
+    persistence.delete_tag(db, tag)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)  # avoid Content-Length Header

@@ -111,7 +111,7 @@ def search_logs(
     action_words: Optional[List[str]],
     action_types: Optional[List[models.ActionType]],
     user_ids: Optional[List[UUID]],
-    pteam_ids: Optional[List[UUID]],
+    pteam_ids: List[UUID],
     emails: Optional[List[str]],
     executed_before: Optional[datetime],
     executed_after: Optional[datetime],
@@ -524,11 +524,37 @@ def get_tag_by_name(db: Session, tag_name: str) -> models.Tag | None:
     return db.scalars(select(models.Tag).where(models.Tag.tag_name == tag_name)).one_or_none()
 
 
+def get_tag_by_tag_id_or_tag_name(
+    db: Session, tag_id: Optional[UUID | str], tag_name: Optional[str]
+) -> models.Tag | None:
+    return (
+        db.query(models.Tag)
+        .filter(
+            true() if tag_id is None else models.Tag.tag_id == str(tag_id),
+            true() if tag_name is None else models.Tag.tag_name == tag_name,
+        )
+        .one_or_none()
+    )
+
+
 def create_tag(db: Session, tag: models.Tag) -> models.Tag:
     db.add(tag)
     db.flush()
     db.refresh(tag)
     return tag
+
+
+def search_tags(db: Session, words: List[str]) -> Sequence[models.Tag]:
+    return db.scalars(
+        select(models.Tag).where(
+            models.Tag.tag_name.bool_op("@@")(func.to_tsquery("|".join(words)))
+        )
+    ).all()
+
+
+def delete_tag(db: Session, tag: models.Tag):
+    db.delete(tag)
+    db.flush()
 
 
 ### MispTag

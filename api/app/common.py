@@ -25,14 +25,7 @@ def validate_tag(  # FIXME  remove after removing from tags.py
     tag_name: Optional[str] = None,
     on_error: Optional[int] = None,
 ) -> Optional[models.Tag]:
-    row = (
-        db.query(models.Tag)
-        .filter(
-            true() if tag_id is None else models.Tag.tag_id == str(tag_id),
-            true() if tag_name is None else models.Tag.tag_name == tag_name,
-        )
-        .one_or_none()
-    )
+    row = persistence.get_tag_by_tag_id_or_tag_name(db, tag_id, tag_name)
     if row is None and on_error is not None:
         raise HTTPException(status_code=on_error, detail="No such tag")
     return row
@@ -277,14 +270,13 @@ def _pick_parent_tag(tag_name: str) -> Optional[str]:
 
 
 def get_or_create_topic_tag(db: Session, tag_name: str) -> models.Tag:
-    row = db.query(models.Tag).filter(models.Tag.tag_name == tag_name).one_or_none()
+    row = persistence.get_tag_by_name(db, tag_name)
     if row is not None:
         return row
 
     row = models.Tag(tag_name=tag_name, parent_id=None, parent_name=None)
-    db.add(row)
+    row = persistence.create_tag(db, row)
     db.commit()
-    db.refresh(row)
 
     if parent_name := _pick_parent_tag(tag_name):
         parent_id = (
@@ -295,9 +287,8 @@ def get_or_create_topic_tag(db: Session, tag_name: str) -> models.Tag:
 
         row.parent_name = parent_name
         row.parent_id = parent_id
-        db.add(row)
+        row = persistence.create_tag(db, row)
         db.commit()
-        db.refresh(row)
 
     return row
 
