@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import true
 
 from app import models
-from app.models import ActionType
+from app.constants import SYSTEM_UUID
 
 ### Account
 
@@ -24,6 +24,12 @@ def get_account_by_id(db: Session, user_id: UUID | str) -> models.Account | None
 
 def get_account_by_email(db: Session, email: str) -> models.Account | None:
     return db.query(models.Account).filter(models.Account.email == email).first()
+
+
+def get_system_account(db: Session) -> models.Account:
+    return db.scalars(
+        select(models.Account).where(models.Account.user_id == str(SYSTEM_UUID))
+    ).one()
 
 
 def create_account(db: Session, account: models.Account) -> models.Account:
@@ -76,6 +82,12 @@ def delete_action(db: Session, action: models.TopicAction) -> None:
 ### ActionLog
 
 
+def get_action_log_by_id(db: Session, logging_id: UUID | str) -> models.ActionLog | None:
+    return db.scalars(
+        select(models.ActionLog).where(models.ActionLog.logging_id == str(logging_id))
+    ).one_or_none()
+
+
 def get_action_logs(db: Session, user_id: UUID | str) -> Sequence[models.ActionLog]:
     return db.scalars(
         select(models.ActionLog)
@@ -103,7 +115,7 @@ def search_logs(
     db: Session,
     topic_ids: Optional[List[UUID]],
     action_words: Optional[List[str]],
-    action_types: Optional[List[ActionType]],
+    action_types: Optional[List[models.ActionType]],
     user_ids: Optional[List[UUID]],
     pteam_ids: Optional[List[UUID]],
     emails: Optional[List[str]],

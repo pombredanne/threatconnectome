@@ -19,7 +19,6 @@ from app.common import (
     get_tag_ids_with_parent_ids,
     pteamtag_try_auto_close_topic,
     set_pteam_topic_status_internal,
-    validate_actionlog,
     validate_topic,
 )
 from app.constants import MEMBER_UUID, NOT_MEMBER_UUID
@@ -810,13 +809,21 @@ def set_pteam_topic_status(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Wrong topic status")
 
     for logging_id_ in data.logging_ids:
-        validate_actionlog(  # FIXME: use get_actionlog_by_id
-            db,
-            logging_id=logging_id_,
-            pteam_id=pteam_id,
-            topic_id=topic_id,
-            on_error=status.HTTP_400_BAD_REQUEST,
-        )
+        if not (log := persistence.get_action_log_by_id(db, logging_id_)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No such actionlog",
+            )
+        if log.pteam_id != str(pteam_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Not an actionlog for the pteam",
+            )
+        if log.topic_id != str(topic_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Not an actionlog for the topic",
+            )
     for assignee in data.assignees:
         if not (a_user := persistence.get_account_by_id(db, assignee)):
             raise HTTPException(

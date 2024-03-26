@@ -19,45 +19,6 @@ from app.version import (
 )
 
 
-def get_system_account(db: Session) -> models.Account:
-    system_account = (
-        db.query(models.Account).filter(models.Account.user_id == str(SYSTEM_UUID)).one_or_none()
-    )
-    if not system_account:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="No such system user",
-        )
-    return system_account
-
-
-def validate_actionlog(
-    db: Session,
-    logging_id: Optional[Union[UUID, str]] = None,
-    action_id: Optional[Union[UUID, str]] = None,
-    topic_id: Optional[Union[UUID, str]] = None,
-    user_id: Optional[Union[UUID, str]] = None,
-    pteam_id: Optional[Union[UUID, str]] = None,
-    email: Optional[str] = None,
-    on_error: Optional[int] = None,
-) -> Optional[models.ActionLog]:
-    row = (
-        db.query(models.ActionLog)
-        .filter(
-            true() if logging_id is None else models.ActionLog.logging_id == str(logging_id),
-            true() if action_id is None else models.ActionLog.action_id == str(action_id),
-            true() if topic_id is None else models.ActionLog.topic_id == str(topic_id),
-            true() if user_id is None else models.ActionLog.user_id == str(user_id),
-            true() if pteam_id is None else models.ActionLog.pteam_id == str(pteam_id),
-            true() if email is None else models.ActionLog.email == email,
-        )
-        .one_or_none()
-    )
-    if row is None and on_error is not None:
-        raise HTTPException(status_code=on_error, detail="No such actionlog")
-    return row
-
-
 def validate_tag(
     db: Session,
     tag_id: Optional[Union[UUID, str]] = None,
@@ -1044,7 +1005,7 @@ def _complete_topic(
     if not actions:
         return
     topic_id = actions[0].topic_id
-    system_account = get_system_account(db)
+    system_account = persistence.get_system_account(db)
 
     logging_ids = []
     for action in actions:
