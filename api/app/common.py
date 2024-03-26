@@ -622,50 +622,6 @@ def get_pteam_topic_status_history(
     return sorted(ret_dict.values(), key=lambda x: x.created_at, reverse=True)
 
 
-def create_actionlog_internal(
-    data: schemas.ActionLogRequest,
-    current_user: models.Account,
-    db: Session,
-    current_status_table_already_fixed: bool = True,  # FIXME: shoud be removed
-):
-    if not (pteam := persistence.get_pteam_by_id(db, data.pteam_id)) or pteam.disabled:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No such pteam")
-    if not check_pteam_membership(db, pteam, current_user):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Not a pteam member")
-    if not (user := persistence.get_account_by_id(db, data.user_id)):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
-    if not check_pteam_membership(db, pteam, user):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Not a pteam member")
-    if not (topic := persistence.get_topic_by_id(db, data.topic_id)) or topic.disabled:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No such topic")
-
-    if current_status_table_already_fixed:  # FIXME
-        if str(data.topic_id) not in command.get_pteam_topic_ids(db, data.pteam_id):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Not a pteam topic")
-
-    if not (
-        topic_action := persistence.get_action(db, data.action_id)
-    ) or topic_action.topic_id != str(data.topic_id):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid action id")
-
-    now = datetime.now()
-    log = models.ActionLog(
-        action_id=data.action_id,
-        topic_id=data.topic_id,
-        action=topic_action.action,
-        action_type=topic_action.action_type,
-        recommended=topic_action.recommended,
-        user_id=data.user_id,
-        pteam_id=data.pteam_id,
-        email=user.email,
-        executed_at=data.executed_at or now,
-        created_at=now,
-    )
-    persistence.create_action_log(db, log)
-
-    return log
-
-
 def set_pteam_topic_status_internal(
     db: Session,
     user: models.Account,
@@ -792,20 +748,23 @@ def _complete_topic(
         return
     topic_id = actions[0].topic_id
     system_account = persistence.get_system_account(db)
+    now = datetime.now()
 
     logging_ids = []
     for action in actions:
-        action_log = create_actionlog_internal(
-            schemas.ActionLogRequest(
-                action_id=UUID(action.action_id),
-                topic_id=UUID(topic_id),
-                user_id=SYSTEM_UUID,
-                pteam_id=UUID(pteam.pteam_id),
-            ),
-            system_account,
-            db,
-            current_status_table_already_fixed=False,
+        action_log = models.ActionLog(
+            action_id=action.action_id,
+            topic_id=topic_id,
+            action=action.action,
+            action_type=action.action_type,
+            recommended=action.recommended,
+            user_id=system_account.user_id,
+            pteam_id=pteam.pteam_id,
+            email=system_account.email,
+            executed_at=now,
+            created_at=now,
         )
+        persistence.create_action_log(db, action_log)
         logging_ids.append(action_log.logging_id)
 
     set_pteam_topic_status_internal(
@@ -816,7 +775,7 @@ def _complete_topic(
         tag,
         schemas.TopicStatusRequest(
             topic_status=models.TopicStatusType.completed,
-            logging_ids=logging_ids,
+            logging_ids=list(map(UUID, logging_ids)),
             note="auto closed by system",
         ),
     )
