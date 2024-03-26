@@ -55,6 +55,12 @@ def get_action_by_user_id(db: Session, user_id: UUID | str) -> models.Account | 
     ).one_or_none()
 
 
+def get_actions_by_topic_id(db: Session, topic_id: UUID | str) -> Sequence[models.TopicAction]:
+    return db.scalars(
+        select(models.TopicAction).where(models.TopicAction.topic_id == str(topic_id))
+    ).all()
+
+
 def create_action(db: Session, action: models.TopicAction) -> models.TopicAction:
     db.add(action)
     db.flush()
@@ -514,7 +520,7 @@ def get_misp_tag_by_name(db: Session, tag_name: str) -> models.MispTag | None:
     return db.query(models.MispTag).filter(models.MispTag.tag_name == tag_name).one_or_none()
 
 
-def create_misp_tag(db: Session, misptag: models.MispTag) -> models.MispTag | None:
+def create_misp_tag(db: Session, misptag: models.MispTag) -> models.MispTag:
     db.add(misptag)
     db.flush()
     db.refresh(misptag)
@@ -553,4 +559,9 @@ def get_topic_by_id(db: Session, topic_id: UUID | str) -> models.Topic | None:
 
 def create_topic(db: Session, topic: models.Topic):
     db.add(topic)
+    db.flush()
+
+
+def delete_topic(db: Session, topic: models.Topic):
+    db.delete(topic)
     db.flush()

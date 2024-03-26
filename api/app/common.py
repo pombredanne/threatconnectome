@@ -504,14 +504,13 @@ def check_topic_action_tags_integrity(
     return True
 
 
-def get_misp_tag(db: Session, tag_name: str):
-    row = db.query(models.MispTag).filter(models.MispTag.tag_name == tag_name).one_or_none()
-    if row is None:
-        row = models.MispTag(tag_name=tag_name)
-        db.add(row)
-        db.commit()
-        db.refresh(row)
-    return row
+def get_or_create_misp_tag(db: Session, tag_name: str) -> models.MispTag:
+    if misp_tag := persistence.get_misp_tag_by_name(db, tag_name):
+        return misp_tag
+
+    misp_tag = models.MispTag(tag_name=tag_name)
+    persistence.create_misp_tag(db, misp_tag)
+    return misp_tag
 
 
 def _pick_parent_tag(tag_name: str) -> Optional[str]:
