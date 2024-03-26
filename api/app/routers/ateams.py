@@ -188,20 +188,19 @@ def apply_invitation(
         )
 
     invitation.ateam.members.append(current_user)
-    invitation.used_count += 1
-    if invitation.authority > 0:
-        ateam_auth = db.query(models.ATeamAuthority).filter(
-            models.ATeamAuthority.ateam_id == invitation.ateam_id,
-            models.ATeamAuthority.user_id == current_user.user_id,
-        ).one_or_none() or models.ATeamAuthority(
-            ateam_id=invitation.ateam_id, user_id=current_user.user_id, authority=0
-        )
-        ateam_auth.authority |= invitation.authority
-        db.add(ateam_auth)
-    db.add(invitation)
-    db.commit()
-    db.refresh(invitation)
 
+    if invitation.authority:  # invitation with authority
+        # Note: non-members never have ateam auth
+        ateam_auth = models.ATeamAuthority(
+            ateam_id=invitation.ateam_id,
+            user_id=current_user.user_id,
+            authority=invitation.authority,
+        )
+        persistence.create_ateam_authority(db, ateam_auth)
+
+    invitation.used_count += 1
+
+    db.commit()
     return _make_ateam_info(invitation.ateam)
 
 
@@ -286,7 +285,7 @@ def update_ateam(
             setattr(ateam, key, models.ATeamMail(**value.__dict__))
             continue
         setattr(ateam, key, value)
-    db.add(ateam)
+
     db.commit()
     db.refresh(ateam)
 
