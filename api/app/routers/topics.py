@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import Dict, List, Optional, Set
+from typing import List, Optional, Set
 from uuid import UUID
 
 import requests
@@ -25,8 +25,6 @@ from app.common import (
     get_misp_tag,
     get_sorted_topics,
     search_topics_internal,
-    validate_action,
-    validate_misp_tag,
     validate_pteam,
     validate_tag,
     validate_topic,
@@ -34,6 +32,9 @@ from app.common import (
 from app.database import get_db
 
 router = APIRouter(prefix="/topics", tags=["topics"])
+
+
+NO_SUCH_TOPIC = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such topic")
 
 
 @router.get("", response_model=List[schemas.TopicEntry])
@@ -111,7 +112,7 @@ def search_topics(
             if tag_name == keyword_for_empty:
                 fixed_tag_ids.add(None)
                 continue
-            if (tag := validate_tag(db, tag_name=tag_name)) is None:
+            if not (tag := persistence.get_tag_by_name(db, tag_name)):
                 continue  # ignore wrong tag_name
             fixed_tag_ids.add(tag.tag_id)
 
@@ -121,7 +122,7 @@ def search_topics(
             if misp_tag_name == keyword_for_empty:
                 fixed_misp_tag_ids.add(None)
                 continue
-            if (misp_tag := validate_misp_tag(db, tag_name=misp_tag_name)) is None:
+            if not (misp_tag := persistence.get_misp_tag_by_name(db, misp_tag_name)):
                 continue  # ignore wrong misp_tag_name
             fixed_misp_tag_ids.add(misp_tag.tag_id)
 
@@ -137,11 +138,9 @@ def search_topics(
     fixed_creator_ids = set()
     if creator_ids is not None:
         for creator_id in creator_ids:
-            try:
-                UUID(creator_id)
-                fixed_creator_ids.add(creator_id)
-            except ValueError:
-                pass
+            if not persistence.get_account_by_id(db, creator_id):
+                continue
+            fixed_creator_ids.add(creator_id)
 
     fixed_title_words: Set[Optional[str]] = set()
     if title_words is not None:
@@ -235,8 +234,9 @@ def get_topic(
     """
     Get a topic.
     """
-    topic = validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND, ignore_disabled=True)
-    assert topic
+    if not (topic := persistence.get_topic_by_id(db, topic_id)) or topic.disabled:
+        raise NO_SUCH_TOPIC
+
     return topic
 
 
@@ -260,13 +260,13 @@ def create_topic(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot create default topic"
         )
-    if validate_topic(db, topic_id, ignore_disabled=True) is not None:
+    if persistence.get_topic_by_id(db, topic_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Topic already exists")
 
     # check tags
     action_tag_names = {tag for action in data.actions for tag in action.ext.get("tags", [])}
-    requested_tags: Dict[str, Optional[models.Tag]] = {
-        tag_name: validate_tag(db, tag_name=tag_name)
+    requested_tags: dict[str, models.Tag | None] = {
+        tag_name: persistence.get_tag_by_name(db, tag_name)
         for tag_name in set(data.tags) | action_tag_names
     }
     if not_exist_tag_names := [tag_name for tag_name, tag in requested_tags.items() if tag is None]:
@@ -274,11 +274,14 @@ def create_topic(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"No such tags: {', '.join(sorted(not_exist_tag_names))}",
         )
-    check_topic_action_tags_integrity(
+    if not check_topic_action_tags_integrity(
         data.tags,
         list(action_tag_names),
-        on_error=status.HTTP_400_BAD_REQUEST,
-    )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Action Tag mismatch with Topic Tag",
+        )
 
     # check actions
     action_ids = [action.action_id for action in data.actions if action.action_id]
@@ -288,7 +291,7 @@ def create_topic(
             detail="Ambiguous action ids",
         )
     for action_id in action_ids:
-        if validate_action(db, action_id) is not None:
+        if persistence.get_action(db, action_id):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Action id already exists",
@@ -320,19 +323,17 @@ def create_topic(
     topic.tags = [requested_tags[tag_name] for tag_name in set(data.tags)]
     topic.misp_tags = [get_misp_tag(db, tag) for tag in set(data.misp_tags)]
 
-    db.add(topic)
-    db.flush()
-    db.refresh(topic)
+    persistence.create_topic(db, topic)
 
     # create and bind actions -- needs active topic_id
     for action in data.actions:
         del action.topic_id
-        create_action_internal(
+        create_action_internal(  # FIXME
             db,
             current_user,
             schemas.ActionCreateRequest(**action.model_dump(), topic_id=UUID(topic.topic_id)),
         )
-    db.refresh(topic)
+    db.refresh(topic)  # apply created actions via relathionship
 
     auto_close_by_topic(db, topic)
     fix_current_status_by_topic(db, topic)

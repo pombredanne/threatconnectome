@@ -468,8 +468,7 @@ def create_action_internal(
         created_at=datetime.now(),
     )
 
-    row = persistence.create_action(db, row)
-    db.commit()
+    persistence.create_action(db, row)
 
     return row
 

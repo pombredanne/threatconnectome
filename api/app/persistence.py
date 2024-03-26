@@ -6,7 +6,7 @@ from sqlalchemy import and_, delete, desc, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import true
 
-from app import models, schemas
+from app import models
 from app.models import ActionType
 
 ### Account
@@ -506,14 +506,12 @@ def create_tag(db: Session, tag: models.Tag) -> models.Tag:
 ### MispTag
 
 
-def get_misp_tags(db: Session) -> list[models.MispTag] | None:
+def get_misp_tags(db: Session) -> list[models.MispTag]:
     return db.query(models.MispTag).all()
 
 
-def get_misp_tag_by_tag_name(db: Session, request: schemas.MispTagRequest) -> models.MispTag | None:
-    return (
-        db.query(models.MispTag).filter(models.MispTag.tag_name == request.tag_name).one_or_none()
-    )
+def get_misp_tag_by_name(db: Session, tag_name: str) -> models.MispTag | None:
+    return db.query(models.MispTag).filter(models.MispTag.tag_name == tag_name).one_or_none()
 
 
 def create_misp_tag(db: Session, misptag: models.MispTag) -> models.MispTag | None:
@@ -551,3 +549,8 @@ def get_topic_by_id(db: Session, topic_id: UUID | str) -> models.Topic | None:
     return db.scalars(
         select(models.Topic).where(models.Topic.topic_id == str(topic_id))
     ).one_or_none()
+
+
+def create_topic(db: Session, topic: models.Topic):
+    db.add(topic)
+    db.flush()
