@@ -46,6 +46,18 @@ def get_pteam_tag_ids(db: Session, pteam_id: UUID | str) -> Sequence[str]:
     ).all()
 
 
+def get_pteam_tags(db: Session, pteam_id: UUID | str) -> Sequence[models.Tag]:
+    return db.scalars(
+        select(models.Tag).where(
+            models.Tag.tag_id.in_(
+                select(models.PTeamTagReference.tag_id.distinct()).where(
+                    models.PTeamTagReference.pteam_id == str(pteam_id)
+                )
+            )
+        )
+    ).all()
+
+
 def missing_pteam_admin(db: Session, pteam: models.PTeam) -> bool:
     return (
         db.execute(

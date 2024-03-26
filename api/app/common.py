@@ -204,6 +204,32 @@ def check_ateam_auth(
     return int_auth & required == required
 
 
+def get_tag_ids_with_parent_ids(tags: Sequence[models.Tag]) -> Sequence[str]:
+    tag_ids_set: set[str] = set()
+    for tag in tags:
+        tag_ids_set.add(tag.tag_id)
+        if tag.parent_id and tag.parent_id != tag.tag_id:
+            tag_ids_set.add(tag.parent_id)
+    return list(tag_ids_set)
+
+
+def get_sorted_topics(topics: Sequence[models.Topic]) -> Sequence[models.Topic]:
+    """
+    Sort topics with standard sort rules -- (threat_impact ASC, updated_at DESC)
+    """
+    return sorted(
+        topics,
+        key=lambda topic: (
+            topic.threat_impact,
+            -(dt.timestamp() if (dt := topic.updated_at) else 0),
+        ),
+    )
+
+
+def get_enabled_topics(topics: Sequence[models.Topic]) -> Sequence[models.Topic]:
+    return list(filter(lambda t: t.disabled is False, topics))
+
+
 def validate_topic(
     db: Session,
     topic_id: Union[UUID, str],

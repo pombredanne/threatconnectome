@@ -21,7 +21,9 @@ from app.common import (
     create_action_internal,
     fix_current_status_by_deleted_topic,
     fix_current_status_by_topic,
+    get_enabled_topics,
     get_misp_tag,
+    get_sorted_topics,
     search_topics_internal,
     validate_action,
     validate_misp_tag,
@@ -51,7 +53,7 @@ def get_topics(
         }
         return hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
     """
-    return persistence.get_all_topics(db, ignore_disabled=False)
+    return get_sorted_topics(get_enabled_topics(persistence.get_all_topics(db)))
 
 
 @router.get("/search", response_model=schemas.SearchTopicsResponse)

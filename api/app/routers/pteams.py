@@ -13,7 +13,10 @@ from app.common import (
     check_pteam_auth,
     check_pteam_membership,
     fix_current_status_by_pteam,
+    get_enabled_topics,
     get_or_create_topic_tag,
+    get_sorted_topics,
+    get_tag_ids_with_parent_ids,
     pteamtag_try_auto_close_topic,
     set_pteam_topic_status_internal,
     validate_actionlog,
@@ -267,11 +270,12 @@ def get_pteam_topics(
     if not check_pteam_membership(db, pteam, current_user):
         raise NOT_A_PTEAM_MEMBER
 
-    tag_ids = command.get_pteam_tag_ids(db, pteam_id)
-    if not tag_ids:
+    pteam_tags = command.get_pteam_tags(db, pteam_id)
+    if not pteam_tags:
         return []
-    return persistence.get_topics_by_tag_ids(
-        db, list(tag_ids), ignore_parent=False, ignore_disabled=False
+    topic_tag_ids = get_tag_ids_with_parent_ids(pteam_tags)
+    return get_sorted_topics(
+        get_enabled_topics(persistence.get_topics_by_tag_ids(db, topic_tag_ids))
     )
 
 

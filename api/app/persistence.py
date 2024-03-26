@@ -534,43 +534,17 @@ def search_misp_tags_by_tag_name(db: Session, words: List[str]) -> List[models.M
 ### Topic
 
 
-def _get_topics_by_tag_ids(
-    db: Session,
-    tag_ids: list[UUID | str] | None,  # caller should care about parent
-    ignore_disabled: bool,
-) -> Sequence[models.Topic]:
+def get_all_topics(db: Session) -> Sequence[models.Topic]:
+    return db.scalars(select(models.Topic)).all()
+
+
+def get_topics_by_tag_ids(db: Session, tag_ids: Sequence[UUID | str]) -> Sequence[models.Topic]:
     return db.scalars(
         select(models.Topic)
         .join(models.TopicTag)
-        .where(
-            true() if tag_ids is None else models.TopicTag.tag_id.in_(list(map(str, tag_ids))),
-            true() if ignore_disabled else models.Topic.disabled.is_(False),
-        )
-        .order_by(models.Topic.threat_impact, models.Topic.updated_at.desc())
+        .where(models.TopicTag.tag_id.in_(list(map(str, tag_ids))))
         .distinct()
     ).all()
-
-
-def get_all_topics(db: Session, ignore_disabled: bool = False) -> Sequence[models.Topic]:
-    return _get_topics_by_tag_ids(db, None, ignore_disabled)
-
-
-def get_topics_by_tag_ids(
-    db: Session,
-    tag_ids: list[UUID | str],
-    ignore_parent: bool = False,
-    ignore_disabled: bool = False,
-) -> Sequence[models.Topic]:
-
-    if ignore_parent:
-        return _get_topics_by_tag_ids(db, tag_ids, ignore_disabled)
-
-    tag_ids_set = set()
-    for tag in db.scalars(select(models.Tag).where(models.Tag.tag_id.in_(tag_ids))).all():
-        tag_ids_set.add(tag.tag_id)
-        if tag.parent_id:
-            tag_ids_set.add(tag.parent_id)
-    return _get_topics_by_tag_ids(db, list(tag_ids_set), ignore_disabled)
 
 
 def get_topic_by_id(db: Session, topic_id: UUID | str) -> models.Topic | None:
