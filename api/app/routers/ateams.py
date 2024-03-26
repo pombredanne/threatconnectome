@@ -72,14 +72,7 @@ def _modify_ateam_auth(
                 )
 
     for user_id, auth in authes:
-        row = (
-            db.query(models.ATeamAuthority)
-            .filter(
-                models.ATeamAuthority.ateam_id == ateam.ateam_id,
-                models.ATeamAuthority.user_id == str(user_id),
-            )
-            .one_or_none()
-        )
+        row = persistence.get_ateam_authority(db, ateam.ateam_id, user_id)
         if row is None:
             if not auth:
                 continue  # nothing to remove
@@ -128,7 +121,7 @@ def create_ateam(
         address=data.alert_mail.address if data.alert_mail else "",
     )
     current_user.ateams.append(ateam)
-    db.add(current_user)
+
     db.commit()
     db.refresh(ateam)
 
@@ -367,22 +360,17 @@ def get_ateam_auth(
     ateam = persistence.get_ateam_by_id(db, ateam_id)
     if ateam is None:
         raise NO_SUCH_ATEAM
-    rows = (
-        db.query(models.ATeamAuthority)
-        .filter(
-            models.ATeamAuthority.ateam_id == str(ateam_id),
-            (
-                true()
-                if check_ateam_membership(ateam, current_user)
-                else models.ATeamAuthority.user_id == str(NOT_MEMBER_UUID)
-            ),  # limit if not a member
-        )
-        .all()
-    )
-    return [
-        {"user_id": row.user_id, "authorities": models.ATeamAuthIntFlag(row.authority).to_enums()}
-        for row in rows
-    ]
+    if current_user in ateam.members:  # member can get all authorities
+        authorities = persistence.get_ateam_all_authorities(db, ateam_id)
+    else:  # not member can get only for NOT_MEMBER_UUID
+        auth_for_not_member = persistence.get_ateam_authority(db, ateam_id, NOT_MEMBER_UUID)
+        authorities = [auth_for_not_member] if auth_for_not_member else []
+
+    response = []
+    for auth in authorities:
+        enums = models.ATeamAuthIntFlag(auth.authority).to_enums()
+        response.append({"user_id": auth.user_id, "authorities": enums})
+    return response
 
 
 @router.get("/{ateam_id}/members", response_model=List[schemas.UserResponse])
