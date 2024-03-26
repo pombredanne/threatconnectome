@@ -194,6 +194,16 @@ def get_ateam_invitation_by_id(
     ).one_or_none()
 
 
+def create_ateam_invitation(
+    db: Session,
+    invitation: models.ATeamInvitation,
+) -> models.ATeamInvitation:
+    db.add(invitation)
+    db.flush()
+    db.refresh(invitation)
+    return invitation
+
+
 def expire_ateam_invitations(db: Session) -> None:
     db.execute(
         delete(models.ATeamInvitation).where(
@@ -250,6 +260,12 @@ def get_ateam_authority(
             models.ATeamAuthority.user_id == str(user_id),
         )
     ).one_or_none()
+
+
+def get_ateam_all_authorities(db: Session, ateam_id: UUID | str) -> Sequence[models.ATeamAuthority]:
+    return db.scalars(
+        select(models.ATeamAuthority).where(models.ATeamAuthority.ateam_id == str(ateam_id))
+    ).all()
 
 
 def create_ateam_authority(db: Session, auth: models.ATeamAuthority) -> models.ATeamAuthority:

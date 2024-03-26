@@ -482,10 +482,10 @@ def create_invitation(
     persistence.expire_ateam_invitations(db)
 
     del data.authorities
-    invitation = models.ATeamInvitation(
+    new_invitation = models.ATeamInvitation(
         ateam_id=str(ateam_id), user_id=current_user.user_id, authority=intflag, **data.model_dump()
     )
-    db.add(invitation)
+    invitation = persistence.create_ateam_invitation(db, new_invitation)
     db.commit()
     db.refresh(invitation)
 
