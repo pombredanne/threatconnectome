@@ -17,7 +17,6 @@ from app.common import (
     calculate_topic_content_fingerprint,
     check_pteam_membership,
     check_topic_action_tags_integrity,
-    create_action_internal,
     fix_current_status_by_deleted_topic,
     fix_current_status_by_topic,
     get_enabled_topics,
@@ -317,18 +316,20 @@ def create_topic(
     # fix relations
     topic.tags = [requested_tags[tag_name] for tag_name in set(data.tags)]
     topic.misp_tags = [get_or_create_misp_tag(db, tag) for tag in set(data.misp_tags)]
+    for action in data.actions:
+        new_action = models.TopicAction(
+            action_id=str(action.action_id) if action.action_id else None,
+            # topic_id will be filled at appending to topic.actions
+            action=action.action,
+            action_type=action.action_type,
+            recommended=action.recommended,
+            ext=action.ext,
+            created_by=current_user.user_id,
+            created_at=now,
+        )
+        topic.actions.append(new_action)
 
     persistence.create_topic(db, topic)
-
-    # create and bind actions -- needs active topic_id
-    for action in data.actions:
-        del action.topic_id
-        create_action_internal(  # FIXME
-            db,
-            current_user,
-            schemas.ActionCreateRequest(**action.model_dump(), topic_id=UUID(topic.topic_id)),
-        )
-    db.refresh(topic)  # apply created actions via relathionship
 
     auto_close_by_topic(db, topic)
     fix_current_status_by_topic(db, topic)

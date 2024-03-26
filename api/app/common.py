@@ -186,44 +186,7 @@ def validate_topic(  # FIXME: should be removed
     return topic
 
 
-def create_action_internal(
-    db: Session,
-    current_user: models.Account,
-    action: schemas.ActionCreateRequest,
-) -> models.TopicAction:
-    if not action.topic_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing topic_id",
-        )
-    topic = validate_topic(
-        db,
-        action.topic_id,
-        on_error=status.HTTP_400_BAD_REQUEST,
-        ignore_disabled=True,
-    )
-    assert topic
-    check_topic_action_tags_integrity(
-        topic.tags,
-        action.ext.get("tags"),
-        on_error=status.HTTP_400_BAD_REQUEST,
-    )
-
-    action_id = str(action.action_id) if action.action_id else None
-    del action.action_id
-    row = models.TopicAction(
-        **action.model_dump(),
-        action_id=action_id,
-        created_by=current_user.user_id,
-        created_at=datetime.now(),
-    )
-
-    persistence.create_action(db, row)
-
-    return row
-
-
-def validate_action(
+def validate_action(  # FIXME: should be removed
     db: Session,
     action_id: Union[UUID, str],
     on_error: Optional[int] = None,
@@ -237,7 +200,7 @@ def validate_action(
 def check_topic_action_tags_integrity(
     topic_tags: Union[Sequence[str], Sequence[models.Tag]],  # tag_name list or topic.tags
     action_tags: Optional[List[str]],  # action.ext.get("tags")
-    on_error: Optional[int] = None,
+    on_error: Optional[int] = None,  # FIXME: on_error should be obsoleted
 ) -> bool:
     if not action_tags:
         return True

@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -10,7 +11,6 @@ from app.common import (
     auto_close_by_topic,
     check_tags_exist,
     check_topic_action_tags_integrity,
-    create_action_internal,
     validate_action,
 )
 from app.database import get_db
@@ -28,19 +28,41 @@ def create_action(
     Create a topic action.
     """
     if not data.topic_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing topic_id",
-        )
-    if data.action_id and validate_action(db, data.action_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing topic_id")
+    if not (topic := persistence.get_topic_by_id(db, data.topic_id)):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No such topic")
+    if data.action_id and persistence.get_action(db, data.action_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Action id already exists",
         )
-    check_tags_exist(db, data.ext.get("tags", []))
-    action = create_action_internal(db, current_user, data)
+
+    check_tags_exist(db, data.ext.get("tags", []))  # FIXME
+
+    if not check_topic_action_tags_integrity(topic.tags, data.ext.get("tags")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Action Tag mismatch with Topic Tag",
+        )
+
+    now = datetime.now()
+    action = models.TopicAction(
+        action_id=str(data.action_id) if data.action_id else None,
+        # topic_id will be filled at appending to topic.actions
+        action=data.action,
+        action_type=data.action_type,
+        recommended=data.recommended,
+        ext=data.ext,
+        created_by=current_user.user_id,
+        created_at=now,
+    )
+    topic.actions.append(action)
+    db.flush()
 
     auto_close_by_topic(db, action.topic)
+
+    db.commit()
+    db.refresh(action)
 
     return action
 
