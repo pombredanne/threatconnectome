@@ -4,9 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
-from sqlalchemy import and_, nullsfirst, select
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.expression import true
 
 from app import command, models, persistence, schemas
 from app.auth import get_current_user
@@ -14,7 +12,6 @@ from app.common import (
     check_ateam_auth,
     check_ateam_membership,
     check_pteam_auth,
-    sortkey2orderby,
     validate_topic,
 )
 from app.constants import MEMBER_UUID, NOT_MEMBER_UUID, SYSTEM_UUID
@@ -733,78 +730,7 @@ def get_topic_status(
     # ignore empty search.
     search = search if search else None
 
-    subq = (
-        select(
-            models.ATeamPTeam.pteam_id.label("pteam_id"),
-            models.PTeam.pteam_name.label("pteam_name"),
-            models.PTeamTagReference.tag_id.label("tag_id"),
-        )
-        .distinct()
-        .join(
-            models.PTeam,
-            and_(
-                models.PTeam.pteam_id == models.ATeamPTeam.pteam_id,
-                models.ATeamPTeam.ateam_id == str(ateam_id),
-            ),
-        )
-        .join(
-            models.PTeamTagReference,
-            models.PTeamTagReference.pteam_id == models.ATeamPTeam.pteam_id,
-        )
-        .subquery()
-    )
-
-    sort_rules = sortkey2orderby[sort_key] + [
-        models.TopicTag.topic_id,  # group by topic
-        nullsfirst(models.PTeamTopicTagStatus.topic_status),  # worst state on array[0]
-        models.PTeamTopicTagStatus.scheduled_at.desc(),  # latest on array[0] if worst is scheduled
-        subq.c.pteam_name,
-        models.Tag.tag_name,
-    ]
-
-    select_stmt = (
-        select(
-            subq.c.pteam_id,
-            subq.c.pteam_name,
-            models.Tag,
-            models.TopicTag.topic_id,
-            models.Topic.title,
-            models.Topic.updated_at,
-            models.Topic.threat_impact,
-            models.PTeamTopicTagStatus,
-        )
-        .join(
-            models.Tag,
-            models.Tag.tag_id == subq.c.tag_id,
-        )
-        .join(
-            models.TopicTag,
-            models.TopicTag.tag_id.in_([models.Tag.tag_id, models.Tag.parent_id]),
-        )
-        .join(
-            models.Topic,
-            and_(
-                models.Topic.title.icontains(search, autoescape=True) if search else true(),
-                models.Topic.disabled.is_(False),
-                models.Topic.topic_id == models.TopicTag.topic_id,
-            ),
-        )
-        .outerjoin(
-            models.CurrentPTeamTopicTagStatus,
-            and_(
-                models.CurrentPTeamTopicTagStatus.pteam_id == subq.c.pteam_id,
-                models.CurrentPTeamTopicTagStatus.tag_id == subq.c.tag_id,
-                models.CurrentPTeamTopicTagStatus.topic_id == models.TopicTag.topic_id,
-            ),
-        )
-        .outerjoin(
-            models.PTeamTopicTagStatus,
-        )
-        .order_by(*sort_rules)
-        .distinct()
-    )
-
-    rows = db.execute(select_stmt).all()
+    rows = command.get_ateam_topic_statuses(db, ateam_id, sort_key, search)
 
     # Caution:
     #   rows includes completed. (how can i filter by query???)

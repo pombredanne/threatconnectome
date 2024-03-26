@@ -1,12 +1,109 @@
 from datetime import datetime
-from typing import Sequence
+from typing import Dict, Sequence
 from uuid import UUID
 
-from sqlalchemy import Row, select
+from sqlalchemy import Row, nullsfirst, select
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.expression import and_, func, or_
+from sqlalchemy.sql.expression import and_, func, or_, true
 
 from app import models, persistence, schemas
+
+# same code in common.py
+sortkey2orderby: Dict[schemas.TopicSortKey, list] = {
+    schemas.TopicSortKey.THREAT_IMPACT: [
+        models.Topic.threat_impact,
+        models.Topic.updated_at.desc(),
+    ],
+    schemas.TopicSortKey.THREAT_IMPACT_DESC: [
+        models.Topic.threat_impact.desc(),
+        models.Topic.updated_at.desc(),
+    ],
+    schemas.TopicSortKey.UPDATED_AT: [
+        models.Topic.updated_at,
+        models.Topic.threat_impact,
+    ],
+    schemas.TopicSortKey.UPDATED_AT_DESC: [
+        models.Topic.updated_at.desc(),
+        models.Topic.threat_impact,
+    ],
+}
+
+
+def get_ateam_topic_statuses(
+    db: Session, ateam_id: UUID | str, sort_key: schemas.TopicSortKey, search: str | None
+):
+    subq = (
+        select(
+            models.ATeamPTeam.pteam_id.label("pteam_id"),
+            models.PTeam.pteam_name.label("pteam_name"),
+            models.PTeamTagReference.tag_id.label("tag_id"),
+        )
+        .distinct()
+        .join(
+            models.PTeam,
+            and_(
+                models.PTeam.pteam_id == models.ATeamPTeam.pteam_id,
+                models.ATeamPTeam.ateam_id == str(ateam_id),
+            ),
+        )
+        .join(
+            models.PTeamTagReference,
+            models.PTeamTagReference.pteam_id == models.ATeamPTeam.pteam_id,
+        )
+        .subquery()
+    )
+
+    sort_rules = sortkey2orderby[sort_key] + [
+        models.TopicTag.topic_id,  # group by topic
+        nullsfirst(models.PTeamTopicTagStatus.topic_status),  # worst state on array[0]
+        models.PTeamTopicTagStatus.scheduled_at.desc(),  # latest on array[0] if worst is scheduled
+        subq.c.pteam_name,
+        models.Tag.tag_name,
+    ]
+
+    select_stmt = (
+        select(
+            subq.c.pteam_id,
+            subq.c.pteam_name,
+            models.Tag,
+            models.TopicTag.topic_id,
+            models.Topic.title,
+            models.Topic.updated_at,
+            models.Topic.threat_impact,
+            models.PTeamTopicTagStatus,
+        )
+        .join(
+            models.Tag,
+            models.Tag.tag_id == subq.c.tag_id,
+        )
+        .join(
+            models.TopicTag,
+            models.TopicTag.tag_id.in_([models.Tag.tag_id, models.Tag.parent_id]),
+        )
+        .join(
+            models.Topic,
+            and_(
+                models.Topic.title.icontains(search, autoescape=True) if search else true(),
+                models.Topic.disabled.is_(False),
+                models.Topic.topic_id == models.TopicTag.topic_id,
+            ),
+        )
+        .outerjoin(
+            models.CurrentPTeamTopicTagStatus,
+            and_(
+                models.CurrentPTeamTopicTagStatus.pteam_id == subq.c.pteam_id,
+                models.CurrentPTeamTopicTagStatus.tag_id == subq.c.tag_id,
+                models.CurrentPTeamTopicTagStatus.topic_id == models.TopicTag.topic_id,
+            ),
+        )
+        .outerjoin(
+            models.PTeamTopicTagStatus,
+        )
+        .order_by(*sort_rules)
+        .distinct()
+    )
+
+    return db.execute(select_stmt).all()
 
 
 def get_ateam_topic_comments(
