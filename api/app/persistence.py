@@ -55,12 +55,6 @@ def get_action(db: Session, action_id: UUID | str) -> models.TopicAction | None:
     )
 
 
-def get_action_by_user_id(db: Session, user_id: UUID | str) -> models.Account | None:
-    return db.scalars(
-        select(models.Account).where(models.Account.user_id == str(user_id))
-    ).one_or_none()
-
-
 def get_actions_by_topic_id(db: Session, topic_id: UUID | str) -> Sequence[models.TopicAction]:
     return db.scalars(
         select(models.TopicAction).where(models.TopicAction.topic_id == str(topic_id))

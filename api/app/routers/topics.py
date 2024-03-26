@@ -9,7 +9,7 @@ from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
-from app import models, persistence, schemas
+from app import command, models, persistence, schemas
 from app.alert import alert_new_topic
 from app.auth import get_current_user, token_scheme
 from app.common import (
@@ -23,7 +23,6 @@ from app.common import (
     get_enabled_topics,
     get_or_create_misp_tag,
     get_sorted_topics,
-    search_topics_internal,
 )
 from app.database import get_db
 
@@ -164,7 +163,7 @@ def search_topics(
             except ValueError:
                 pass
 
-    return search_topics_internal(
+    return command.search_topics_internal(
         db,
         current_user,
         offset=offset,

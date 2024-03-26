@@ -19,7 +19,7 @@ from app.version import (
 )
 
 
-def validate_tag(
+def validate_tag(  # FIXME  remove after removing from tags.py
     db: Session,
     tag_id: Optional[Union[UUID, str]] = None,
     tag_name: Optional[str] = None,
@@ -38,23 +38,6 @@ def validate_tag(
     return row
 
 
-def validate_misp_tag(
-    db: Session,
-    tag_id: Optional[Union[UUID, str]] = None,
-    tag_name: Optional[str] = None,
-) -> Optional[models.MispTag]:
-    if tag_id is None and tag_name is None:
-        return None
-    return (
-        db.query(models.MispTag)
-        .filter(
-            true() if tag_id is None else models.MispTag.tag_id == str(tag_id),
-            true() if tag_name is None else models.MispTag.tag_name == tag_name,
-        )
-        .one_or_none()
-    )
-
-
 def check_tags_exist(db: Session, tag_names: List[str]):
     _existing_tags = (
         db.query(models.Tag.tag_name).filter(models.Tag.tag_name.in_(tag_names)).all()
@@ -69,7 +52,7 @@ def check_tags_exist(db: Session, tag_names: List[str]):
         )
 
 
-def validate_pteam(
+def validate_pteam(  # FIXME should obsolete
     db: Session,
     pteam_id: Union[UUID, str],
     on_error: Optional[int] = None,
@@ -191,7 +174,7 @@ def get_enabled_topics(topics: Sequence[models.Topic]) -> Sequence[models.Topic]
     return list(filter(lambda t: t.disabled is False, topics))
 
 
-def validate_topic(
+def validate_topic(  # FIXME: should be removed
     db: Session,
     topic_id: Union[UUID, str],
     on_error: Optional[int] = None,
@@ -208,193 +191,6 @@ def validate_topic(
     if topic is None and on_error is not None:
         raise HTTPException(status_code=on_error, detail="No such topic")
     return topic
-
-
-sortkey2orderby: Dict[schemas.TopicSortKey, list] = {
-    schemas.TopicSortKey.THREAT_IMPACT: [
-        models.Topic.threat_impact,
-        models.Topic.updated_at.desc(),
-    ],
-    schemas.TopicSortKey.THREAT_IMPACT_DESC: [
-        models.Topic.threat_impact.desc(),
-        models.Topic.updated_at.desc(),
-    ],
-    schemas.TopicSortKey.UPDATED_AT: [
-        models.Topic.updated_at,
-        models.Topic.threat_impact,
-    ],
-    schemas.TopicSortKey.UPDATED_AT_DESC: [
-        models.Topic.updated_at.desc(),
-        models.Topic.threat_impact,
-    ],
-}
-
-
-def search_topics_internal(
-    db: Session,
-    current_user: models.Account,
-    offset: int = 0,
-    limit: int = 10,
-    sort_key: schemas.TopicSortKey = schemas.TopicSortKey.THREAT_IMPACT,
-    threat_impacts: Optional[List[int]] = None,
-    title_words: Optional[List[Optional[str]]] = None,
-    abstract_words: Optional[List[Optional[str]]] = None,
-    tag_ids: Optional[List[Optional[str]]] = None,
-    misp_tag_ids: Optional[List[Optional[str]]] = None,
-    topic_ids: Optional[List[str]] = None,
-    creator_ids: Optional[List[str]] = None,
-    created_after: Optional[datetime] = None,
-    created_before: Optional[datetime] = None,
-    updated_after: Optional[datetime] = None,
-    updated_before: Optional[datetime] = None,
-) -> dict:
-    # search conditions
-    search_by_threat_impacts_stmt = (
-        true()
-        if threat_impacts is None  # do not filter by threat_impact
-        else models.Topic.threat_impact.in_(threat_impacts)
-    )
-    search_by_tag_ids_stmt = (
-        true()
-        if tag_ids is None  # do not filter by tag_id
-        else or_(
-            false(),
-            *[
-                (
-                    models.TopicTag.tag_id.is_(None)  # no tags
-                    if tag_id is None
-                    else models.TopicTag.tag_id == tag_id
-                )
-                for tag_id in tag_ids
-            ],
-        )
-    )
-    search_by_misp_tag_ids_stmt = (
-        true()
-        if misp_tag_ids is None  # do not filter by misp_tag_id
-        else or_(
-            false(),
-            *[
-                (
-                    models.TopicMispTag.tag_id.is_(None)  # no misp_tags
-                    if misp_tag_id is None
-                    else models.TopicMispTag.tag_id == misp_tag_id
-                )
-                for misp_tag_id in misp_tag_ids
-            ],
-        )
-    )
-    search_by_topic_ids_stmt = (
-        true()
-        if topic_ids is None  # do not filter by topic_id
-        else models.Topic.topic_id.in_(topic_ids)
-    )
-    search_by_creator_ids_stmt = (
-        true()
-        if creator_ids is None  # do not filter by created_by
-        else models.Topic.created_by.in_(creator_ids)
-    )
-    search_by_title_words_stmt = (
-        true()
-        if title_words is None  # do not filter by title
-        else or_(
-            false(),
-            *[
-                (
-                    models.Topic.title == ""  # empty title
-                    if title_word is None
-                    else models.Topic.title.icontains(title_word, autoescape=True)
-                )
-                for title_word in title_words
-            ],
-        )
-    )
-    search_by_abstract_words_stmt = (
-        true()
-        if abstract_words is None  # do not filter by abstract
-        else or_(
-            false(),
-            *[
-                (
-                    models.Topic.abstract == ""  # empty abstract
-                    if abstract_word is None
-                    else models.Topic.abstract.icontains(abstract_word, autoescape=True)
-                )
-                for abstract_word in abstract_words
-            ],
-        )
-    )
-    search_by_created_before_stmt = (
-        true()
-        if created_before is None  # do not filter by created_before
-        else models.Topic.created_at <= created_before
-    )
-    search_by_created_after_stmt = (
-        true()
-        if created_after is None  # do not filter by created_after
-        else models.Topic.created_at >= created_after
-    )
-    search_by_updated_before_stmt = (
-        true()
-        if updated_before is None  # do not filter by updated_before
-        else models.Topic.updated_at <= updated_before
-    )
-    search_by_updated_after_stmt = (
-        true()
-        if updated_after is None  # do not filter by updated_after
-        else models.Topic.updated_at >= updated_after
-    )
-
-    search_conditions = [
-        search_by_threat_impacts_stmt,
-        search_by_tag_ids_stmt,
-        search_by_misp_tag_ids_stmt,
-        search_by_topic_ids_stmt,
-        search_by_creator_ids_stmt,
-        search_by_title_words_stmt,
-        search_by_abstract_words_stmt,
-        search_by_created_before_stmt,
-        search_by_created_after_stmt,
-        search_by_updated_before_stmt,
-        search_by_updated_after_stmt,
-    ]
-    filter_topics_stmt = and_(
-        models.Topic.disabled.is_(False),
-        *search_conditions,
-    )
-
-    # join tables only if required
-    select_topics_stmt = select(models.Topic)
-    select_count_stmt = select(func.count(models.Topic.topic_id.distinct()))
-    if tag_ids is not None:
-        select_topics_stmt = select_topics_stmt.outerjoin(models.TopicTag)
-        select_count_stmt = select_count_stmt.outerjoin(models.TopicTag)
-    if misp_tag_ids is not None:
-        select_topics_stmt = select_topics_stmt.outerjoin(models.TopicMispTag)
-        select_count_stmt = select_count_stmt.outerjoin(models.TopicMispTag)
-
-    # count total amount of matched topics
-    count_result_stmt = select_count_stmt.where(filter_topics_stmt)
-    num_topics = db.scalars(count_result_stmt).one()
-
-    # search topics
-    search_topics_stmt = (
-        select_topics_stmt.where(filter_topics_stmt)
-        .distinct()
-        .order_by(*sortkey2orderby[sort_key])
-        .offset(offset)
-        .limit(limit)
-    )
-    topics = db.scalars(search_topics_stmt).all()
-
-    result = {
-        "num_topics": num_topics,
-        "sort_key": sort_key,
-        "offset": offset,
-        "limit": limit,
-        "topics": topics,
-    }
-    return result
 
 
 def create_action_internal(
@@ -830,54 +626,44 @@ def create_actionlog_internal(
     data: schemas.ActionLogRequest,
     current_user: models.Account,
     db: Session,
-    current_status_table_already_fixed: bool = True,
+    current_status_table_already_fixed: bool = True,  # FIXME: shoud be removed
 ):
-    pteam = validate_pteam(db, data.pteam_id, on_error=status.HTTP_400_BAD_REQUEST)
-    assert pteam
-    check_pteam_membership(db, pteam, current_user)
-    user = persistence.get_action_by_user_id(db, data.user_id)
-    if not user:
+    if not (pteam := persistence.get_pteam_by_id(db, data.pteam_id)) or pteam.disabled:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No such pteam")
+    if not check_pteam_membership(db, pteam, current_user):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Not a pteam member")
+    if not (user := persistence.get_account_by_id(db, data.user_id)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
-    check_pteam_membership(db, pteam, user)
-    topic = validate_topic(db, data.topic_id, on_error=status.HTTP_400_BAD_REQUEST)
-    assert topic
+    if not check_pteam_membership(db, pteam, user):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Not a pteam member")
+    if not (topic := persistence.get_topic_by_id(db, data.topic_id)) or topic.disabled:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No such topic")
 
-    if (
-        current_status_table_already_fixed
-        and db.scalars(
-            select(models.CurrentPTeamTopicTagStatus).where(
-                models.CurrentPTeamTopicTagStatus.pteam_id == pteam.pteam_id,
-                models.CurrentPTeamTopicTagStatus.topic_id == topic.topic_id,
-            )
-        ).first()
-        is None
-    ):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Not a pteam topic")
-    topic_action = (
-        db.query(models.TopicAction)
-        .filter(
-            models.TopicAction.topic_id == str(data.topic_id),
-            models.TopicAction.action_id == str(data.action_id),
-        )
-        .one_or_none()
-    )
-    if not topic_action:
+    if current_status_table_already_fixed:  # FIXME
+        if str(data.topic_id) not in command.get_pteam_topic_ids(db, data.pteam_id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Not a pteam topic")
+
+    if not (
+        topic_action := persistence.get_action(db, data.action_id)
+    ) or topic_action.topic_id != str(data.topic_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid action id")
 
-    result = data.model_dump()
-    result["action"] = topic_action.action
-    result["action_type"] = topic_action.action_type
-    result["recommended"] = topic_action.recommended
-    result["pteam_id"] = data.pteam_id
-    result["email"] = user.email or ""
     now = datetime.now()
-    result["executed_at"] = data.executed_at or now
-    result["created_at"] = now
-    log = models.ActionLog(**result)
-    result = persistence.create_action_log(db, log)
-    db.commit()
+    log = models.ActionLog(
+        action_id=data.action_id,
+        topic_id=data.topic_id,
+        action=topic_action.action,
+        action_type=topic_action.action_type,
+        recommended=topic_action.recommended,
+        user_id=data.user_id,
+        pteam_id=data.pteam_id,
+        email=user.email,
+        executed_at=data.executed_at or now,
+        created_at=now,
+    )
+    persistence.create_action_log(db, log)
 
-    return result
+    return log
 
 
 def set_pteam_topic_status_internal(

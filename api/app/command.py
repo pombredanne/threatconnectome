@@ -4,11 +4,10 @@ from uuid import UUID
 
 from sqlalchemy import Row, nullsfirst, select
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.expression import and_, func, or_, true
+from sqlalchemy.sql.expression import and_, false, func, or_, true
 
 from app import models, persistence, schemas
 
-# same code in common.py
 sortkey2orderby: Dict[schemas.TopicSortKey, list] = {
     schemas.TopicSortKey.THREAT_IMPACT: [
         models.Topic.threat_impact,
@@ -165,6 +164,14 @@ def missing_pteam_admin(db: Session, pteam: models.PTeam) -> bool:
         ).first()
         is None
     )
+
+
+def get_pteam_topic_ids(db: Session, pteam_id: UUID | str) -> Sequence[str]:
+    return db.scalars(
+        select(models.CurrentPTeamTopicTagStatus.topic_id.distinct()).where(
+            models.CurrentPTeamTopicTagStatus.pteam_id == str(pteam_id)
+        )
+    ).all()
 
 
 def count_pteam_topics_per_threat_impact(
@@ -507,3 +514,170 @@ def get_auto_close_triable_pteam_topics(
     ).all()
 
     return [row.topic for row in rows]
+
+
+def search_topics_internal(
+    db: Session,
+    current_user: models.Account,
+    offset: int = 0,
+    limit: int = 10,
+    sort_key: schemas.TopicSortKey = schemas.TopicSortKey.THREAT_IMPACT,
+    threat_impacts: list[int] | None = None,
+    title_words: list[str | None] | None = None,
+    abstract_words: list[str | None] | None = None,
+    tag_ids: list[str | None] | None = None,
+    misp_tag_ids: list[str | None] | None = None,
+    topic_ids: list[str] | None = None,
+    creator_ids: list[str] | None = None,
+    created_after: datetime | None = None,
+    created_before: datetime | None = None,
+    updated_after: datetime | None = None,
+    updated_before: datetime | None = None,
+) -> dict:
+    # search conditions
+    search_by_threat_impacts_stmt = (
+        true()
+        if threat_impacts is None  # do not filter by threat_impact
+        else models.Topic.threat_impact.in_(threat_impacts)
+    )
+    search_by_tag_ids_stmt = (
+        true()
+        if tag_ids is None  # do not filter by tag_id
+        else or_(
+            false(),
+            *[
+                (
+                    models.TopicTag.tag_id.is_(None)  # no tags
+                    if tag_id is None
+                    else models.TopicTag.tag_id == tag_id
+                )
+                for tag_id in tag_ids
+            ],
+        )
+    )
+    search_by_misp_tag_ids_stmt = (
+        true()
+        if misp_tag_ids is None  # do not filter by misp_tag_id
+        else or_(
+            false(),
+            *[
+                (
+                    models.TopicMispTag.tag_id.is_(None)  # no misp_tags
+                    if misp_tag_id is None
+                    else models.TopicMispTag.tag_id == misp_tag_id
+                )
+                for misp_tag_id in misp_tag_ids
+            ],
+        )
+    )
+    search_by_topic_ids_stmt = (
+        true()
+        if topic_ids is None  # do not filter by topic_id
+        else models.Topic.topic_id.in_(topic_ids)
+    )
+    search_by_creator_ids_stmt = (
+        true()
+        if creator_ids is None  # do not filter by created_by
+        else models.Topic.created_by.in_(creator_ids)
+    )
+    search_by_title_words_stmt = (
+        true()
+        if title_words is None  # do not filter by title
+        else or_(
+            false(),
+            *[
+                (
+                    models.Topic.title == ""  # empty title
+                    if title_word is None
+                    else models.Topic.title.icontains(title_word, autoescape=True)
+                )
+                for title_word in title_words
+            ],
+        )
+    )
+    search_by_abstract_words_stmt = (
+        true()
+        if abstract_words is None  # do not filter by abstract
+        else or_(
+            false(),
+            *[
+                (
+                    models.Topic.abstract == ""  # empty abstract
+                    if abstract_word is None
+                    else models.Topic.abstract.icontains(abstract_word, autoescape=True)
+                )
+                for abstract_word in abstract_words
+            ],
+        )
+    )
+    search_by_created_before_stmt = (
+        true()
+        if created_before is None  # do not filter by created_before
+        else models.Topic.created_at <= created_before
+    )
+    search_by_created_after_stmt = (
+        true()
+        if created_after is None  # do not filter by created_after
+        else models.Topic.created_at >= created_after
+    )
+    search_by_updated_before_stmt = (
+        true()
+        if updated_before is None  # do not filter by updated_before
+        else models.Topic.updated_at <= updated_before
+    )
+    search_by_updated_after_stmt = (
+        true()
+        if updated_after is None  # do not filter by updated_after
+        else models.Topic.updated_at >= updated_after
+    )
+
+    search_conditions = [
+        search_by_threat_impacts_stmt,
+        search_by_tag_ids_stmt,
+        search_by_misp_tag_ids_stmt,
+        search_by_topic_ids_stmt,
+        search_by_creator_ids_stmt,
+        search_by_title_words_stmt,
+        search_by_abstract_words_stmt,
+        search_by_created_before_stmt,
+        search_by_created_after_stmt,
+        search_by_updated_before_stmt,
+        search_by_updated_after_stmt,
+    ]
+    filter_topics_stmt = and_(
+        models.Topic.disabled.is_(False),
+        *search_conditions,
+    )
+
+    # join tables only if required
+    select_topics_stmt = select(models.Topic)
+    select_count_stmt = select(func.count(models.Topic.topic_id.distinct()))
+    if tag_ids is not None:
+        select_topics_stmt = select_topics_stmt.outerjoin(models.TopicTag)
+        select_count_stmt = select_count_stmt.outerjoin(models.TopicTag)
+    if misp_tag_ids is not None:
+        select_topics_stmt = select_topics_stmt.outerjoin(models.TopicMispTag)
+        select_count_stmt = select_count_stmt.outerjoin(models.TopicMispTag)
+
+    # count total amount of matched topics
+    count_result_stmt = select_count_stmt.where(filter_topics_stmt)
+    num_topics = db.scalars(count_result_stmt).one()
+
+    # search topics
+    search_topics_stmt = (
+        select_topics_stmt.where(filter_topics_stmt)
+        .distinct()
+        .order_by(*sortkey2orderby[sort_key])
+        .offset(offset)
+        .limit(limit)
+    )
+    topics = db.scalars(search_topics_stmt).all()
+
+    result = {
+        "num_topics": num_topics,
+        "sort_key": sort_key,
+        "offset": offset,
+        "limit": limit,
+        "topics": topics,
+    }
+    return result

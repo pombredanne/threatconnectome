@@ -19,7 +19,6 @@ from app.common import (
     get_tag_ids_with_parent_ids,
     pteamtag_try_auto_close_topic,
     set_pteam_topic_status_internal,
-    validate_topic,
 )
 from app.constants import MEMBER_UUID, NOT_MEMBER_UUID
 from app.database import get_db
@@ -856,23 +855,25 @@ def get_pteam_topic_status(
         raise NO_SUCH_PTEAM
     if not check_pteam_membership(db, pteam, current_user):
         raise NOT_A_PTEAM_MEMBER
-    topic = validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert topic
-    # TODO: should check pteam topic???
-    # TODO: should check topic tag?? -- should care about parent&child
-
+    if not (topic := persistence.get_topic_by_id(db, topic_id)) or topic.disabled:
+        raise NO_SUCH_TOPIC
     if not (tag := persistence.get_tag_by_id(db, tag_id)):
         raise NO_SUCH_TAG
     if tag not in {ref.tag for ref in pteam.references}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam tag")
 
+    # TODO: should check pteam topic???
+    # TODO: should check topic tag?? -- should care about parent&child
+
     current_row = persistence.get_current_pteam_topic_tag_status(db, pteam_id, topic_id, tag_id)
     if current_row is None or current_row.status_id is None:
+        # should not happen if request is right
         return {
             "pteam_id": pteam_id,
             "topic_id": topic_id,
             "tag_id": tag_id,
         }
+
     status_row = persistence.get_pteam_topic_tag_status_by_id(db, current_row.status_id)
     assert status_row
     return command.pteam_topic_tag_status_to_response(db, status_row)
