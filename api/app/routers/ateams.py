@@ -1,9 +1,10 @@
 from datetime import datetime
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app import command, models, persistence, schemas
@@ -42,49 +43,6 @@ def _make_ateam_info(ateam: models.ATeam) -> schemas.ATeamInfo:
     )
 
 
-def _modify_ateam_auth(
-    db: Session,
-    ateam: models.ATeam,
-    authes: List[
-        Tuple[
-            Union[UUID, str],  # user_id
-            Union[models.ATeamAuthIntFlag, int],  # auth. 0 for delete
-        ]
-    ],
-):
-    for user_id, auth in authes:
-        if str(user_id) in map(str, [MEMBER_UUID, NOT_MEMBER_UUID]):
-            if auth & models.ATeamAuthIntFlag.ADMIN:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Cannot give ADMIN to pseudo account",
-                )
-        else:
-            if not (user := persistence.get_account_by_id(db, user_id)):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid user id",
-                )
-            if not check_ateam_membership(ateam, user):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Not an ateam member",
-                )
-
-    for user_id, auth in authes:
-        row = persistence.get_ateam_authority(db, ateam.ateam_id, user_id)
-        if row is None:
-            if not auth:
-                continue  # nothing to remove
-            row = models.ATeamAuthority(ateam_id=ateam.ateam_id, user_id=str(user_id))
-        if auth:
-            row.authority = int(auth)
-            db.add(row)
-        else:
-            db.delete(row)
-    db.commit()
-
-
 @router.get("", response_model=List[schemas.ATeamEntry])
 def get_ateams(
     current_user: models.Account = Depends(get_current_user), db: Session = Depends(get_db)
@@ -120,20 +78,32 @@ def create_ateam(
         enable=data.alert_mail.enable if data.alert_mail else True,
         address=data.alert_mail.address if data.alert_mail else "",
     )
-    current_user.ateams.append(ateam)
+    ateam = persistence.create_ateam(db, ateam)
+
+    # join to the created ateam
+    ateam.members.append(current_user)
+
+    # set default authority
+    user_auth = models.ATeamAuthority(
+        ateam_id=ateam.ateam_id,
+        user_id=current_user.user_id,
+        authority=models.ATeamAuthIntFlag.ATEAM_MASTER,
+    )
+    member_auth = models.ATeamAuthority(
+        ateam_id=ateam.ateam_id,
+        user_id=str(MEMBER_UUID),
+        authority=models.ATeamAuthIntFlag.ATEAM_MEMBER,
+    )
+    not_member_auth = models.ATeamAuthority(
+        ateam_id=ateam.ateam_id,
+        user_id=str(NOT_MEMBER_UUID),
+        authority=models.ATeamAuthIntFlag.FREE_TEMPLATE,
+    )
+    persistence.create_ateam_authority(db, user_auth)
+    persistence.create_ateam_authority(db, member_auth)
+    persistence.create_ateam_authority(db, not_member_auth)
 
     db.commit()
-    db.refresh(ateam)
-
-    _modify_ateam_auth(
-        db,
-        ateam,
-        [
-            (current_user.user_id, models.ATeamAuthIntFlag.ATEAM_MASTER),
-            (MEMBER_UUID, models.ATeamAuthIntFlag.ATEAM_MEMBER),
-            (NOT_MEMBER_UUID, models.ATeamAuthIntFlag.FREE_TEMPLATE),
-        ],
-    )
 
     return _make_ateam_info(ateam)
 
@@ -305,42 +275,53 @@ def update_ateam_auth(
     str_ids = [str(x.user_id) for x in requests]
     if len(set(str_ids)) != len(str_ids):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ambiguous request")
-    for str_id in str_ids:
-        if str_id == str(SYSTEM_UUID):
+
+    response = []
+    for request in requests:
+        if (user_id := str(request.user_id)) == str(SYSTEM_UUID):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
-        if str_id in {str(MEMBER_UUID), str(NOT_MEMBER_UUID)}:
-            continue
-        if not (user := persistence.get_account_by_id(db, str_id)):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid user id",
+        if (user_id := str(request.user_id)) in list(map(str, [MEMBER_UUID, NOT_MEMBER_UUID])):
+            if "admin" in request.authorities:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot give ADMIN to pseudo account",
+                )
+        else:
+            if not (user := persistence.get_account_by_id(db, user_id)):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid user id",
+                )
+            if not check_ateam_membership(ateam, user):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Not an ateam member",
+                )
+        if not (auth := persistence.get_ateam_authority(db, ateam_id, user_id)):
+            auth = models.ATeamAuthority(
+                ateam_id=str(ateam_id),
+                user_id=user_id,
+                authority=0,
             )
-        if not check_ateam_membership(ateam, user):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Not an ateam member",
-            )
-    if not any(models.ATeamAuthEnum.ADMIN in x.authorities for x in requests):
-        _guard_last_admin(db, ateam_id, str_ids)
+            auth = persistence.create_ateam_authority(db, auth)
+        auth.authority = models.ATeamAuthIntFlag.from_enums(request.authorities)
 
-    _modify_ateam_auth(
-        db,
-        ateam,
-        [(x.user_id, models.ATeamAuthIntFlag.from_enums(x.authorities)) for x in requests],
-    )
-
-    authes = (
-        db.query(models.ATeamAuthority)
-        .filter(
-            models.ATeamAuthority.ateam_id == str(ateam_id),
-            models.ATeamAuthority.user_id.in_(str_ids),
+    db.flush()
+    if command.missing_ateam_admin(db, ateam):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Removing last ADMIN is not allowed"
         )
-        .all()
-    )
-    auth_map = {x.user_id: models.ATeamAuthIntFlag(x.authority).to_enums() for x in authes}
-    response = [
-        {"user_id": user_id, "authorities": auth_map.get(user_id) or []} for user_id in str_ids
-    ]
+
+    db.commit()
+
+    for request in requests:
+        auth = persistence.get_ateam_authority(db, ateam_id, request.user_id)
+        response.append(
+            {
+                "user_id": request.user_id,
+                "authorities": models.ATeamAuthIntFlag(auth.authority).to_enums() if auth else [],
+            }
+        )
     return response
 
 
@@ -391,22 +372,6 @@ def get_ateam_members(
     return ateam.members
 
 
-def _guard_last_admin(db: Session, ateam_id: UUID, excludes: Sequence[Union[UUID, str]]):
-    if (
-        db.query(models.ATeamAuthority.user_id)
-        .filter(
-            models.ATeamAuthority.ateam_id == str(ateam_id),
-            models.ATeamAuthority.authority.op("&")(models.ATeamAuthIntFlag.ADMIN) > 0,
-            models.ATeamAuthority.user_id.not_in(list(map(str, excludes))),
-        )
-        .count()
-        == 0
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Removing last ADMIN is not allowed"
-        )
-
-
 @router.delete("/{ateam_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_member(
     ateam_id: UUID,
@@ -424,16 +389,33 @@ def delete_member(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot remove pseudo account"
         )
-    if current_user.user_id != str(user_id):
-        if not check_ateam_auth(db, ateam, current_user, models.ATeamAuthIntFlag.ADMIN):
-            raise NOT_HAVE_AUTH
-    if not check_ateam_membership(ateam, current_user):
-        raise NOT_AN_ATEAM_MEMBER
-    _guard_last_admin(db, ateam_id, [user_id])
-    _modify_ateam_auth(db, ateam, [(user_id, 0)])
 
-    ateam.members = [user for user in ateam.members if user.user_id != str(user_id)]
-    db.add(ateam)
+    if current_user.user_id != str(user_id) and not check_ateam_auth(
+        db, ateam, current_user, models.ATeamAuthIntFlag.ADMIN
+    ):
+        raise NOT_HAVE_AUTH
+
+    target_users = [x for x in ateam.members if x.user_id == str(user_id)]
+    if len(target_users) == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such ateam member")
+
+    # remove all extra authorities  # FIXME: should be deleted on cascade
+    db.execute(
+        delete(models.ATeamAuthority).where(
+            models.ATeamAuthority.ateam_id == str(ateam_id),
+            models.ATeamAuthority.user_id == str(user_id),
+        )
+    )
+
+    # remove from members
+    ateam.members.remove(target_users[0])
+
+    db.flush()
+    if command.missing_ateam_admin(db, ateam):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Removing last ADMIN is not allowed"
+        )
+
     db.commit()
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -611,10 +593,10 @@ def create_watching_request(
 
     persistence.expire_ateam_watching_requests(db)
 
-    watching_request = models.ATeamWatchingRequest(
+    new_watching_request = models.ATeamWatchingRequest(
         ateam_id=str(ateam_id), user_id=current_user.user_id, **data.model_dump()
     )
-    db.add(watching_request)
+    watching_request = persistence.create_ateam_watching_request(db, new_watching_request)
     db.commit()
     db.refresh(watching_request)
 

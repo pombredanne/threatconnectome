@@ -134,6 +134,18 @@ def get_ateam_topic_comments(
     )
 
 
+def missing_ateam_admin(db: Session, ateam: models.ATeam) -> bool:
+    return (
+        db.execute(
+            select(models.ATeamAuthority).where(
+                models.ATeamAuthority.ateam_id == ateam.ateam_id,
+                models.ATeamAuthority.authority.op("&")(models.ATeamAuthIntFlag.ADMIN) != 0,
+            )
+        ).first()
+        is None
+    )
+
+
 def get_pteam_tag_ids(db: Session, pteam_id: UUID | str) -> Sequence[str]:
     return db.scalars(
         select(models.PTeamTagReference.tag_id.distinct()).where(

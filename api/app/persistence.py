@@ -177,6 +177,13 @@ def get_all_ateams(db: Session) -> Sequence[models.ATeam]:
     return db.scalars(select(models.ATeam)).all()
 
 
+def create_ateam(db: Session, ateam: models.ATeam) -> models.ATeam:
+    db.add(ateam)
+    db.flush()
+    db.refresh(ateam)
+    return ateam
+
+
 def get_ateam_invitation_by_id(
     db: Session,
     invitation_id: UUID | str,
@@ -222,6 +229,16 @@ def get_ateam_watching_request_by_id(
             models.ATeamWatchingRequest.request_id == str(request_id)
         )
     ).one_or_none()
+
+
+def create_ateam_watching_request(
+    db: Session,
+    request: models.ATeamWatchingRequest,
+) -> models.ATeamWatchingRequest:
+    db.add(request)
+    db.flush()
+    db.refresh(request)
+    return request
 
 
 def expire_ateam_watching_requests(db: Session) -> None:
