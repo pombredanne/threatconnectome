@@ -41,6 +41,12 @@ def workaround_delete_pteam_authority(db: Session, auth: models.PTeamAuthority) 
     db.flush()
 
 
+def workaround_delete_ateam_authority(db: Session, auth: models.ATeamAuthority) -> None:
+    # this is workaround until models fixed with delete on cascade
+    db.delete(auth)
+    db.flush()
+
+
 def get_ateam_topic_statuses(
     db: Session, ateam_id: UUID | str, sort_key: schemas.TopicSortKey, search: str | None
 ):

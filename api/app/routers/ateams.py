@@ -4,7 +4,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
-from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app import command, models, persistence, schemas
@@ -13,7 +12,6 @@ from app.common import (
     check_ateam_auth,
     check_ateam_membership,
     check_pteam_auth,
-    validate_topic,
 )
 from app.constants import MEMBER_UUID, NOT_MEMBER_UUID, SYSTEM_UUID
 from app.database import get_db
@@ -22,6 +20,7 @@ from app.slack import validate_slack_webhook_url
 router = APIRouter(prefix="/ateams", tags=["ateams"])
 
 NO_SUCH_ATEAM = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such ateam")
+NO_SUCH_TOPIC = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such topic")
 NOT_AN_ATEAM_MEMBER = HTTPException(
     status_code=status.HTTP_403_FORBIDDEN,
     detail="Not an ateam member",
@@ -189,12 +188,11 @@ def apply_watching_request(
         raise NOT_HAVE_AUTH
 
     watching_request.ateam.pteams.append(pteam)
-
     watching_request.used_count += 1
+    db.flush()
+    persistence.expire_ateam_watching_requests(db)
 
-    db.add(watching_request)
     db.commit()
-    db.refresh(watching_request)
 
     return pteam
 
@@ -400,12 +398,8 @@ def delete_member(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such ateam member")
 
     # remove all extra authorities  # FIXME: should be deleted on cascade
-    db.execute(
-        delete(models.ATeamAuthority).where(
-            models.ATeamAuthority.ateam_id == str(ateam_id),
-            models.ATeamAuthority.user_id == str(user_id),
-        )
-    )
+    if auth := persistence.get_ateam_authority(db, ateam_id, user_id):
+        command.workaround_delete_ateam_authority(db, auth)
 
     # remove from members
     ateam.members.remove(target_users[0])
@@ -505,10 +499,11 @@ def delete_invitation(
     persistence.expire_ateam_invitations(db)
 
     # omit validating invitation to avoid raising error if already expired.
-    db.query(models.ATeamInvitation).filter(
-        models.ATeamInvitation.invitation_id == str(invitation_id)
-    ).delete()
+    if invitation := persistence.get_ateam_invitation_by_id(db, invitation_id):
+        persistence.delete_ateam_invitation(db, invitation)
+
     db.commit()
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -565,7 +560,7 @@ def remove_watching_pteam(
         raise NOT_HAVE_AUTH
 
     ateam.pteams = [pteam for pteam in ateam.pteams if pteam.pteam_id != str(pteam_id)]
-    db.add(ateam)
+
     db.commit()
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -642,10 +637,11 @@ def delete_watching_request(
     persistence.expire_ateam_watching_requests(db)
 
     # omit validating request to avoid raising error if already expired.
-    db.query(models.ATeamWatchingRequest).filter(
-        models.ATeamWatchingRequest.request_id == str(request_id)
-    ).delete()
+    if request := persistence.get_ateam_watching_request_by_id(db, request_id):
+        persistence.delete_ateam_watching_request(db, request)
+
     db.commit()
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -786,7 +782,8 @@ def get_topic_comments(
     """
     if not (ateam := persistence.get_ateam_by_id(db, ateam_id)):
         raise NO_SUCH_ATEAM
-    validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
+    if not persistence.get_topic_by_id(db, topic_id):
+        raise NO_SUCH_TOPIC
     if not check_ateam_membership(ateam, current_user):
         raise NOT_AN_ATEAM_MEMBER
     return command.get_ateam_topic_comments(db, ateam_id, topic_id)
@@ -807,7 +804,8 @@ def add_topic_comment(
     """
     if not (ateam := persistence.get_ateam_by_id(db, ateam_id)):
         raise NO_SUCH_ATEAM
-    validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
+    if not persistence.get_topic_by_id(db, topic_id):
+        raise NO_SUCH_TOPIC
     if not check_ateam_membership(ateam, current_user):
         raise NOT_AN_ATEAM_MEMBER
     new_comment = models.ATeamTopicComment(
@@ -840,7 +838,8 @@ def update_topic_comment(
     """
     if not persistence.get_ateam_by_id(db, ateam_id):
         raise NO_SUCH_ATEAM
-    validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
+    if not persistence.get_topic_by_id(db, topic_id):
+        raise NO_SUCH_TOPIC
     comment = persistence.get_ateam_topic_comment_by_id(db, comment_id)
     if not comment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such comment")
@@ -868,7 +867,8 @@ def delete_topic_comment(
     """
     if not (ateam := persistence.get_ateam_by_id(db, ateam_id)):
         raise NO_SUCH_ATEAM
-    validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
+    if not persistence.get_topic_by_id(db, topic_id):
+        raise NO_SUCH_TOPIC
     comment = persistence.get_ateam_topic_comment_by_id(db, comment_id)
     if not comment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such comment")

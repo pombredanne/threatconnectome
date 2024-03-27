@@ -205,6 +205,11 @@ def create_ateam_invitation(
     return invitation
 
 
+def delete_ateam_invitation(db: Session, invitation: models.ATeamInvitation) -> None:
+    db.delete(invitation)
+    db.flush()
+
+
 def expire_ateam_invitations(db: Session) -> None:
     db.execute(
         delete(models.ATeamInvitation).where(
@@ -239,6 +244,11 @@ def create_ateam_watching_request(
     db.flush()
     db.refresh(request)
     return request
+
+
+def delete_ateam_watching_request(db: Session, request: models.ATeamWatchingRequest) -> None:
+    db.delete(request)
+    db.flush()
 
 
 def expire_ateam_watching_requests(db: Session) -> None:
