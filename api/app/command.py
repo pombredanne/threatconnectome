@@ -166,6 +166,146 @@ def get_pteam_tags(db: Session, pteam_id: UUID | str) -> Sequence[models.Tag]:
     ).all()
 
 
+def get_pteam_tag_versions(db: Session, pteam_id: UUID | str, tag_id: UUID | str) -> Sequence[str]:
+    return db.scalars(
+        select(models.PTeamTagReference.version.distinct()).where(
+            models.PTeamTagReference.pteam_id == str(pteam_id),
+            models.PTeamTagReference.tag_id == str(tag_id),
+            models.PTeamTagReference.version != "",
+        )
+    ).all()
+
+
+def pick_actions_related_to_pteam_tag_from_topic(
+    db: Session,
+    topic: models.Topic,
+    pteam: models.PTeam,
+    tag: models.Tag,  # should be PTeamTag, not TopicTag
+) -> Sequence[models.TopicAction]:
+    return db.scalars(
+        select(models.TopicAction).where(
+            models.TopicAction.topic_id == topic.topic_id,
+            # Note:
+            #   We should find INVALID or EMPTY vulnerables to abort auto-close, but could not. :(
+            #   SQL will skip the row caused error, e.g. KeyError on JSON.
+            #   Thus "WHERE NOT json_array_length(...) > 0" does not make sense.
+            or_(
+                func.json_array_length(  # len(ext["vulnerable_versions"][tag_name])
+                    models.TopicAction.ext.op("->")("vulnerable_versions").op("->")(tag.tag_name)
+                )
+                > 0,
+                and_(
+                    true() if tag.tag_name != tag.parent_name else false(),  # tag is child
+                    func.json_array_length(
+                        models.TopicAction.ext.op("->")("vulnerable_versions").op("->")(
+                            tag.parent_name
+                        )
+                    )  # actions which have version for tag.parent
+                    > 0,
+                ),
+            ),
+        )
+    ).all()
+
+
+def pick_topics_related_to_pteam_tag(
+    db: Session,
+    pteam: models.PTeam,
+    tag: models.Tag,
+) -> Sequence[models.Topic]:
+    now = datetime.now()
+    already_completed_or_scheduled_stmt = (
+        select(models.CurrentPTeamTopicTagStatus)
+        .join(
+            models.PTeamTopicTagStatus,
+            and_(
+                models.CurrentPTeamTopicTagStatus.pteam_id == pteam.pteam_id,
+                models.CurrentPTeamTopicTagStatus.tag_id == tag.tag_id,
+                models.CurrentPTeamTopicTagStatus.topic_id == models.Topic.topic_id,
+                models.PTeamTopicTagStatus.status_id == models.CurrentPTeamTopicTagStatus.status_id,
+                or_(
+                    models.PTeamTopicTagStatus.topic_status == models.TopicStatusType.completed,
+                    and_(
+                        models.PTeamTopicTagStatus.topic_status == models.TopicStatusType.scheduled,
+                        models.PTeamTopicTagStatus.scheduled_at > now,
+                    ),
+                ),
+            ),
+        )
+        .exists()
+    )
+    select_topic_stmt = select(models.Topic).join(
+        models.TopicTag,
+        and_(
+            models.Topic.disabled.is_(False),
+            models.TopicTag.tag_id.in_([tag.tag_id, tag.parent_id]),
+            models.TopicTag.topic_id == models.Topic.topic_id,
+            ~already_completed_or_scheduled_stmt,
+        ),
+    )
+
+    topics = db.scalars(select_topic_stmt).all()
+    return topics
+
+
+def pick_pteam_tags_related_to_topic(
+    db: Session,
+    topic: models.Topic,
+) -> Sequence[tuple[models.PTeam, models.Tag]]:
+    if topic.disabled:
+        return []
+    now = datetime.now()
+    already_completed_or_scheduled_stmt = (
+        select(models.CurrentPTeamTopicTagStatus)
+        .join(
+            models.PTeamTopicTagStatus,
+            and_(
+                models.CurrentPTeamTopicTagStatus.topic_id == topic.topic_id,
+                models.PTeamTopicTagStatus.status_id == models.CurrentPTeamTopicTagStatus.status_id,
+                or_(
+                    models.PTeamTopicTagStatus.topic_status == models.TopicStatusType.completed,
+                    and_(
+                        models.PTeamTopicTagStatus.topic_status == models.TopicStatusType.scheduled,
+                        models.PTeamTopicTagStatus.scheduled_at > now,
+                    ),
+                ),
+            ),
+        )
+        .exists()
+    )
+    select_ptrs_related_to_topic_stmt = (
+        select(
+            models.PTeamTagReference.pteam_id,
+            models.PTeamTagReference.tag_id,
+            models.PTeam,
+            models.Tag,
+        )
+        .distinct()
+        .join(models.Tag)
+        .join(
+            models.TopicTag,
+            and_(
+                models.TopicTag.topic_id == topic.topic_id,
+                or_(
+                    models.TopicTag.tag_id == models.Tag.tag_id,
+                    models.TopicTag.tag_id == models.Tag.parent_id,
+                ),
+                ~already_completed_or_scheduled_stmt,
+            ),
+        )
+        .join(
+            models.PTeam,
+            and_(
+                models.PTeam.disabled.is_(False),
+                models.PTeamTagReference.pteam_id == models.PTeam.pteam_id,
+            ),
+        )
+    )
+
+    ptrs = db.execute(select_ptrs_related_to_topic_stmt).all()
+    return [(ptr.PTeam, ptr.Tag) for ptr in ptrs]
+
+
 def missing_pteam_admin(db: Session, pteam: models.PTeam) -> bool:
     return (
         db.execute(

@@ -1,13 +1,12 @@
 import json
 from datetime import datetime
 from hashlib import md5
-from typing import List, Optional, Sequence, Set, Tuple, Union
+from typing import Optional, Sequence, Set, Union
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.expression import false, true
+from sqlalchemy.sql.expression import true
 
 from app import command, models, persistence, schemas
 from app.constants import MEMBER_UUID, NOT_MEMBER_UUID, SYSTEM_UUID
@@ -18,7 +17,7 @@ from app.version import (
 )
 
 
-def check_tags_exist(db: Session, tag_names: List[str]):
+def check_tags_exist(db: Session, tag_names: Sequence[str]):  # FIXME: should obsolete
     _existing_tags = (
         db.query(models.Tag.tag_name).filter(models.Tag.tag_name.in_(tag_names)).all()
     )  # [('tag1',), ('tag2',), ('tag3',)]
@@ -184,15 +183,15 @@ def validate_action(  # FIXME: should be removed
     return action
 
 
-def _pick_parent_tag(tag_name: str) -> Optional[str]:
+def _pick_parent_tag(tag_name: str) -> str | None:
     if len(tag_name.split(":", 2)) == 3:  # supported format
         return tag_name.rsplit(":", 1)[0] + ":"  # trim the right most field
     return None
 
 
 def check_topic_action_tags_integrity(
-    topic_tags: Union[Sequence[str], Sequence[models.Tag]],  # tag_name list or topic.tags
-    action_tags: Optional[List[str]],  # action.ext.get("tags")
+    topic_tags: Sequence[str] | Sequence[models.Tag],  # tag_name list or topic.tags
+    action_tags: Sequence[str] | None,  # action.ext.get("tags")
     on_error: Optional[int] = None,  # FIXME: on_error should be obsoleted
 ) -> bool:
     if not action_tags:
@@ -245,7 +244,7 @@ def calculate_topic_content_fingerprint(
     title: str,
     abstract: str,
     threat_impact: int,
-    tag_names: List[str],
+    tag_names: Sequence[str],
 ) -> str:
     data = {
         "title": title,
@@ -310,36 +309,6 @@ def set_pteam_topic_status_internal(
     db.flush()
 
     return command.pteam_topic_tag_status_to_response(db, new_status)
-
-
-def _pick_actions_related_to_pteamtag_from_topic(
-    db: Session,
-    topic: models.Topic,
-    pteam: models.PTeam,
-    tag: models.Tag,  # should be bound to pteam, not to topic
-) -> Sequence[models.TopicAction]:
-    select_stmt = select(models.TopicAction).where(
-        models.TopicAction.topic_id == topic.topic_id,
-        # Note:
-        #   We should find INVALID or EMPTY vulnerables to abort auto-close, but could not. :(
-        #   SQL will skip the row caused error, e.g. KeyError on JSON.
-        #   Thus "WHERE NOT json_array_length(...) > 0" does not make sense.
-        or_(
-            func.json_array_length(  # len(ext["vulnerable_versions"][tag_name])
-                models.TopicAction.ext.op("->")("vulnerable_versions").op("->")(tag.tag_name)
-            )
-            > 0,
-            and_(
-                true() if tag.tag_name != tag.parent_name else false(),
-                func.json_array_length(
-                    models.TopicAction.ext.op("->")("vulnerable_versions").op("->")(tag.parent_name)
-                )
-                > 0,
-            ),
-        ),
-    )
-    actions = db.scalars(select_stmt).all()
-    return list(set(actions))
 
 
 def _pick_vulnerable_version_strings_from_actions(
@@ -416,17 +385,11 @@ def pteamtag_try_auto_close_topic(
 
     try:
         # pick unique reference versions to compare. (omit empty -- maybe added on WebUI)
-        reference_versions = db.scalars(
-            select(models.PTeamTagReference.version.distinct()).where(
-                models.PTeamTagReference.pteam_id == pteam.pteam_id,
-                models.PTeamTagReference.tag_id == tag.tag_id,
-                models.PTeamTagReference.version != "",
-            )
-        ).all()
+        reference_versions = command.get_pteam_tag_versions(db, pteam.pteam_id, tag.tag_id)
         if not reference_versions:
             return  # no references to compare
         # pick all actions which matched on tags
-        actions = _pick_actions_related_to_pteamtag_from_topic(db, topic, pteam, tag)
+        actions = command.pick_actions_related_to_pteam_tag_from_topic(db, topic, pteam, tag)
         if not actions:  # this topic does not have actions for this pteamtag
             return
         # pick all matched vulnerables from actions
@@ -453,114 +416,16 @@ def pteamtag_try_auto_close_topic(
     _complete_topic(db, pteam, tag, actions)
 
 
-def _pick_topics_related_to_pteamtag(
-    db: Session,
-    pteam: models.PTeam,
-    tag: models.Tag,
-) -> Sequence[models.Topic]:
-    now = datetime.now()
-    already_completed_or_scheduled_stmt = (
-        select(models.CurrentPTeamTopicTagStatus)
-        .join(
-            models.PTeamTopicTagStatus,
-            and_(
-                models.CurrentPTeamTopicTagStatus.pteam_id == pteam.pteam_id,
-                models.CurrentPTeamTopicTagStatus.tag_id == tag.tag_id,
-                models.CurrentPTeamTopicTagStatus.topic_id == models.Topic.topic_id,
-                models.PTeamTopicTagStatus.status_id == models.CurrentPTeamTopicTagStatus.status_id,
-                or_(
-                    models.PTeamTopicTagStatus.topic_status == models.TopicStatusType.completed,
-                    and_(
-                        models.PTeamTopicTagStatus.topic_status == models.TopicStatusType.scheduled,
-                        models.PTeamTopicTagStatus.scheduled_at > now,
-                    ),
-                ),
-            ),
-        )
-        .exists()
-    )
-    select_topic_stmt = select(models.Topic).join(
-        models.TopicTag,
-        and_(
-            models.Topic.disabled.is_(False),
-            models.TopicTag.tag_id.in_([tag.tag_id, tag.parent_id]),
-            models.TopicTag.topic_id == models.Topic.topic_id,
-            ~already_completed_or_scheduled_stmt,
-        ),
-    )
-
-    topics = db.scalars(select_topic_stmt).all()
-    return topics
-
-
-def auto_close_by_pteamtags(db: Session, pteamtags: List[Tuple[models.PTeam, models.Tag]]):
+def auto_close_by_pteamtags(db: Session, pteamtags: Sequence[tuple[models.PTeam, models.Tag]]):
     for pteam, tag in pteamtags:
         if pteam.disabled:
             continue
-        for topic in _pick_topics_related_to_pteamtag(db, pteam, tag):
+        for topic in command.pick_topics_related_to_pteam_tag(db, pteam, tag):
             pteamtag_try_auto_close_topic(db, pteam, tag, topic)
-
-
-def _pick_pteamtags_related_to_topic(
-    db: Session,
-    topic: models.Topic,
-) -> Sequence[Tuple[models.PTeam, models.Tag]]:
-    if topic.disabled:
-        return []
-    now = datetime.now()
-    already_completed_or_scheduled_stmt = (
-        select(models.CurrentPTeamTopicTagStatus)
-        .join(
-            models.PTeamTopicTagStatus,
-            and_(
-                models.CurrentPTeamTopicTagStatus.topic_id == topic.topic_id,
-                models.PTeamTopicTagStatus.status_id == models.CurrentPTeamTopicTagStatus.status_id,
-                or_(
-                    models.PTeamTopicTagStatus.topic_status == models.TopicStatusType.completed,
-                    and_(
-                        models.PTeamTopicTagStatus.topic_status == models.TopicStatusType.scheduled,
-                        models.PTeamTopicTagStatus.scheduled_at > now,
-                    ),
-                ),
-            ),
-        )
-        .exists()
-    )
-    select_ptrs_related_to_topic_stmt = (
-        select(
-            models.PTeamTagReference.pteam_id,
-            models.PTeamTagReference.tag_id,
-            models.PTeam,
-            models.Tag,
-        )
-        .distinct()
-        .join(models.Tag)
-        .join(
-            models.TopicTag,
-            and_(
-                models.TopicTag.topic_id == topic.topic_id,
-                or_(
-                    models.TopicTag.tag_id == models.Tag.tag_id,
-                    models.TopicTag.tag_id == models.Tag.parent_id,
-                ),
-                ~already_completed_or_scheduled_stmt,
-            ),
-        )
-        .join(
-            models.PTeam,
-            and_(
-                models.PTeam.disabled.is_(False),
-                models.PTeamTagReference.pteam_id == models.PTeam.pteam_id,
-            ),
-        )
-    )
-
-    ptrs = db.execute(select_ptrs_related_to_topic_stmt).all()
-    return [(ptr.PTeam, ptr.Tag) for ptr in ptrs]
 
 
 def auto_close_by_topic(db: Session, topic: models.Topic):
     if topic.disabled:
         return
-    for pteam, tag in _pick_pteamtags_related_to_topic(db, topic):
+    for pteam, tag in command.pick_pteam_tags_related_to_topic(db, topic):
         pteamtag_try_auto_close_topic(db, pteam, tag, topic)
