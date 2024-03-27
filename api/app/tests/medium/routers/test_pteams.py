@@ -760,9 +760,8 @@ def test_update_pteam_auth__pseudo_admin():
     assert response.reason_phrase == "Bad Request"
 
 
-def test_update_pteam_auth__remove_admin():
+def test_update_pteam_auth__remove_admin__last():
     user1 = create_user(USER1)
-    user2 = create_user(USER2)
     pteam1 = create_pteam(USER1, PTEAM1)
 
     # remove last admin
@@ -776,11 +775,19 @@ def test_update_pteam_auth__remove_admin():
     assert response.reason_phrase == "Bad Request"
     assert response.json()["detail"] == "Removing last ADMIN is not allowed"
 
+
+def test_update_pteam_auth__remove_admin__another():
+    user1 = create_user(USER1)
+    user2 = create_user(USER2)
+    pteam1 = create_pteam(USER1, PTEAM1)
     # invite another admin
     invitation = invite_to_pteam(USER1, pteam1.pteam_id, ["admin"])
     accept_pteam_invitation(USER2, invitation.invitation_id)
 
     # try removing (no more last) admin
+    request = [
+        {"user_id": str(user1.user_id), "authorities": []},
+    ]
     response = client.post(
         f"/pteams/{pteam1.pteam_id}/authority", headers=headers(USER1), json=request
     )
@@ -1333,7 +1340,7 @@ def test_apply_invitation__individual_auth():
     assert set(auth_map.get(str(user2.user_id), {}).get("authorities", [])) == set(request_auth)
 
 
-def test_delete_member():
+def test_delete_member__last_admin():
     user1 = create_user(USER1)
     pteam1 = create_pteam(USER1, PTEAM1)
 
@@ -1351,18 +1358,45 @@ def test_delete_member():
     assert response.reason_phrase == "Bad Request"
     assert response.json()["detail"] == "Removing last ADMIN is not allowed"
 
+
+def test_delete_member__last_admin_another():
+    user1 = create_user(USER1)
+    pteam1 = create_pteam(USER1, PTEAM1)
+
+    response = client.get("/users/me", headers=headers(USER1))
+    assert response.status_code == 200
+    data = response.json()
+    assert data["user_id"] == str(user1.user_id)
+    assert {UUID(pteam["pteam_id"]) for pteam in data["pteams"]} == {pteam1.pteam_id}
+
     # invite another member (not ADMIN)
-    user2 = create_user(USER2)
+    create_user(USER2)
     invitation = invite_to_pteam(USER1, pteam1.pteam_id)
     accept_pteam_invitation(USER2, invitation.invitation_id)
 
-    # try again
+    # try leaving the pteam
     response = client.delete(
         f"/pteams/{pteam1.pteam_id}/members/{user1.user_id}", headers=headers(USER1)
     )
     assert response.status_code == 400
     assert response.reason_phrase == "Bad Request"
     assert response.json()["detail"] == "Removing last ADMIN is not allowed"
+
+
+def test_delete_member__not_last_admin():
+    user1 = create_user(USER1)
+    pteam1 = create_pteam(USER1, PTEAM1)
+
+    response = client.get("/users/me", headers=headers(USER1))
+    assert response.status_code == 200
+    data = response.json()
+    assert data["user_id"] == str(user1.user_id)
+    assert {UUID(pteam["pteam_id"]) for pteam in data["pteams"]} == {pteam1.pteam_id}
+
+    # invite another member (not ADMIN)
+    user2 = create_user(USER2)
+    invitation = invite_to_pteam(USER1, pteam1.pteam_id)
+    accept_pteam_invitation(USER2, invitation.invitation_id)
 
     # make the other member ADMIN
     response = client.post(
@@ -1372,7 +1406,7 @@ def test_delete_member():
     )
     assert response.status_code == 200
 
-    # try again
+    # try leaving pteam
     response = client.delete(
         f"/pteams/{pteam1.pteam_id}/members/{user1.user_id}", headers=headers(USER1)
     )
@@ -1421,13 +1455,18 @@ def test_delete_member__by_admin():
     assert response.reason_phrase == "Bad Request"
     assert response.json()["detail"] == "Removing last ADMIN is not allowed"
 
+
+def test_delete_member__by_admin_myself():
+    create_user(USER1)
+    user2 = create_user(USER2)
+    pteam1 = create_pteam(USER1, PTEAM1)
     # invite another ADMIN
-    invitation = invite_to_pteam(USER3, pteam1.pteam_id, ["admin"])
+    invitation = invite_to_pteam(USER1, pteam1.pteam_id, ["admin"])
     accept_pteam_invitation(USER2, invitation.invitation_id)
 
     # kickout myself
     response = client.delete(
-        f"/pteams/{pteam1.pteam_id}/members/{user3.user_id}", headers=headers(USER3)
+        f"/pteams/{pteam1.pteam_id}/members/{user2.user_id}", headers=headers(USER2)
     )
     assert response.status_code == 204
 
