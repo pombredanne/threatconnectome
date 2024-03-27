@@ -13,7 +13,7 @@ from app.constants import SYSTEM_UUID
 
 
 def get_account_by_firebase_uid(db: Session, uid: str) -> models.Account | None:
-    return db.query(models.Account).filter(models.Account.uid == uid).one_or_none()
+    return db.scalars(select(models.Account).where(models.Account.uid == uid)).one_or_none()
 
 
 def get_account_by_id(db: Session, user_id: UUID | str) -> models.Account | None:
@@ -23,7 +23,7 @@ def get_account_by_id(db: Session, user_id: UUID | str) -> models.Account | None
 
 
 def get_account_by_email(db: Session, email: str) -> models.Account | None:
-    return db.query(models.Account).filter(models.Account.email == email).first()
+    return db.scalars(select(models.Account).where(models.Account.email == email)).first()
 
 
 def get_system_account(db: Session) -> models.Account:
@@ -48,11 +48,9 @@ def delete_account(db: Session, account: models.Account) -> None:
 
 
 def get_action(db: Session, action_id: UUID | str) -> models.TopicAction | None:
-    return (
-        db.query(models.TopicAction)
-        .filter(models.TopicAction.action_id == str(action_id))
-        .one_or_none()
-    )
+    return db.scalars(
+        select(models.TopicAction).where(models.TopicAction.action_id == str(action_id))
+    ).one_or_none()
 
 
 def get_actions_by_topic_id(db: Session, topic_id: UUID | str) -> Sequence[models.TopicAction]:
@@ -574,12 +572,14 @@ def delete_tag(db: Session, tag: models.Tag):
 ### MispTag
 
 
-def get_misp_tags(db: Session) -> list[models.MispTag]:
-    return db.query(models.MispTag).all()
+def get_misp_tags(db: Session) -> Sequence[models.MispTag]:
+    return db.scalars(select(models.MispTag)).all()
 
 
 def get_misp_tag_by_name(db: Session, tag_name: str) -> models.MispTag | None:
-    return db.query(models.MispTag).filter(models.MispTag.tag_name == tag_name).one_or_none()
+    return db.scalars(
+        select(models.MispTag).where(models.MispTag.tag_name == tag_name)
+    ).one_or_none()
 
 
 def create_misp_tag(db: Session, misptag: models.MispTag) -> models.MispTag:
@@ -589,12 +589,12 @@ def create_misp_tag(db: Session, misptag: models.MispTag) -> models.MispTag:
     return misptag
 
 
-def search_misp_tags_by_tag_name(db: Session, words: List[str]) -> List[models.MispTag]:
-    return (
-        db.query(models.MispTag)
-        .filter(models.MispTag.tag_name.bool_op("@@")(func.to_tsquery("|".join(words))))
-        .all()
-    )
+def search_misp_tags_by_tag_name(db: Session, words: List[str]) -> Sequence[models.MispTag]:
+    return db.scalars(
+        select(models.MispTag).where(
+            models.MispTag.tag_name.bool_op("@@")(func.to_tsquery("|".join(words)))
+        )
+    ).all()
 
 
 ### Topic
