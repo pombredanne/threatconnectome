@@ -12,7 +12,6 @@ from app.common import (
     auto_close_by_pteamtags,
     check_pteam_auth,
     check_pteam_membership,
-    fix_current_status_by_pteam,
     get_enabled_topics,
     get_or_create_topic_tag,
     get_sorted_topics,
@@ -656,7 +655,7 @@ def apply_group_tags(
         ]:
             auto_close_by_pteamtags(db, [(pteam, ptr.tag) for ptr in ptrs_for_auto_close])
 
-    fix_current_status_by_pteam(db, pteam)
+    command.fix_current_status_by_pteam(db, pteam)
 
     return command.get_pteam_ext_tags(db, pteam)
 
@@ -736,7 +735,7 @@ def update_pteam(
         ptr_dict = {ptr.tag_id: ptr.tag for ptr in ptrs}  # pick only 1 tag for each tag_id
         auto_close_by_pteamtags(db, [(pteam, tag) for tag in ptr_dict.values()])
 
-    fix_current_status_by_pteam(db, pteam)
+    command.fix_current_status_by_pteam(db, pteam)
 
     db.commit()
 

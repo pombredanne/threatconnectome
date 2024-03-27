@@ -5,8 +5,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple, Union
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, delete, func, literal_column, or_, select
-from sqlalchemy.dialects.postgresql import insert as psql_insert
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import false, true
 
@@ -197,6 +196,12 @@ def validate_action(  # FIXME: should be removed
     return action
 
 
+def _pick_parent_tag(tag_name: str) -> Optional[str]:
+    if len(tag_name.split(":", 2)) == 3:  # supported format
+        return tag_name.rsplit(":", 1)[0] + ":"  # trim the right most field
+    return None
+
+
 def check_topic_action_tags_integrity(
     topic_tags: Union[Sequence[str], Sequence[models.Tag]],  # tag_name list or topic.tags
     action_tags: Optional[List[str]],  # action.ext.get("tags")
@@ -226,12 +231,6 @@ def get_or_create_misp_tag(db: Session, tag_name: str) -> models.MispTag:
     return misp_tag
 
 
-def _pick_parent_tag(tag_name: str) -> Optional[str]:
-    if len(tag_name.split(":", 2)) == 3:  # supported format
-        return tag_name.rsplit(":", 1)[0] + ":"  # trim the right most field
-    return None
-
-
 def get_or_create_topic_tag(db: Session, tag_name: str) -> models.Tag:
     if tag := persistence.get_tag_by_name(db, tag_name):  # already exists
         return tag
@@ -252,266 +251,6 @@ def get_or_create_topic_tag(db: Session, tag_name: str) -> models.Tag:
     persistence.create_tag(db, tag)
 
     return tag
-
-
-def fix_current_status_by_pteam(db: Session, pteam: models.PTeam):
-    if pteam.disabled:
-        db.query(models.CurrentPTeamTopicTagStatus).filter(
-            models.CurrentPTeamTopicTagStatus.pteam_id == pteam.pteam_id
-        ).delete()
-        db.commit()
-        return
-
-    # remove untagged
-    db.execute(
-        delete(models.CurrentPTeamTopicTagStatus).where(
-            models.CurrentPTeamTopicTagStatus.pteam_id == pteam.pteam_id,
-            models.CurrentPTeamTopicTagStatus.tag_id.not_in(
-                select(models.PTeamTagReference.tag_id.distinct()).where(
-                    models.PTeamTagReference.pteam_id == pteam.pteam_id
-                )
-            ),
-        )
-    )
-
-    # insert missings or updated with latest
-    tagged_topics = (
-        db.query(models.TopicTag.topic_id, models.Tag.tag_id)  # tag_id is pteam tag (not topic tag)
-        .join(
-            models.Tag,
-            and_(
-                models.Tag.tag_id.in_(
-                    select(models.PTeamTagReference.tag_id.distinct()).where(
-                        models.PTeamTagReference.pteam_id == pteam.pteam_id
-                    )
-                ),
-                or_(
-                    models.TopicTag.tag_id == models.Tag.tag_id,
-                    models.TopicTag.tag_id == models.Tag.parent_id,
-                ),
-            ),
-        )
-        .join(
-            models.Topic,
-            and_(
-                models.Topic.topic_id == models.TopicTag.topic_id,
-                models.Topic.disabled.is_(False),
-            ),
-        )
-        .distinct()
-        .subquery()
-    )
-    latests = (
-        db.query(
-            models.PTeamTopicTagStatus.pteam_id,
-            models.PTeamTopicTagStatus.topic_id,
-            models.PTeamTopicTagStatus.tag_id,
-            func.max(models.PTeamTopicTagStatus.created_at).label("latest"),
-        )
-        .filter(
-            models.PTeamTopicTagStatus.pteam_id == pteam.pteam_id,
-        )
-        .group_by(
-            models.PTeamTopicTagStatus.pteam_id,
-            models.PTeamTopicTagStatus.topic_id,
-            models.PTeamTopicTagStatus.tag_id,
-        )
-        .subquery()
-    )
-    new_currents = (
-        db.query(
-            literal_column(f"'{pteam.pteam_id}'").label("pteam_id"),
-            tagged_topics.c.topic_id,
-            tagged_topics.c.tag_id,
-            models.PTeamTopicTagStatus.status_id,
-            func.coalesce(models.PTeamTopicTagStatus.topic_status, models.TopicStatusType.alerted),
-            models.Topic.threat_impact,
-            models.Topic.updated_at,
-        )
-        .join(
-            models.Topic,
-            models.Topic.topic_id == tagged_topics.c.topic_id,
-        )
-        .outerjoin(
-            latests,
-            and_(
-                latests.c.pteam_id == pteam.pteam_id,
-                latests.c.topic_id == tagged_topics.c.topic_id,
-                latests.c.tag_id == tagged_topics.c.tag_id,
-            ),
-        )
-        .outerjoin(
-            models.PTeamTopicTagStatus,
-            and_(
-                models.PTeamTopicTagStatus.pteam_id == pteam.pteam_id,
-                models.PTeamTopicTagStatus.topic_id == latests.c.topic_id,
-                models.PTeamTopicTagStatus.tag_id == latests.c.tag_id,
-                models.PTeamTopicTagStatus.created_at == latests.c.latest,  # use as uniq key
-            ),
-        )
-    )
-    insert_stmt = psql_insert(models.CurrentPTeamTopicTagStatus).from_select(
-        [
-            "pteam_id",
-            "topic_id",
-            "tag_id",
-            "status_id",
-            "topic_status",
-            "threat_impact",
-            "updated_at",
-        ],
-        new_currents,
-    )
-    db.execute(
-        insert_stmt.on_conflict_do_update(
-            index_elements=["pteam_id", "topic_id", "tag_id"],
-            set_={
-                "status_id": insert_stmt.excluded.status_id,
-                "threat_impact": insert_stmt.excluded.threat_impact,
-                "updated_at": insert_stmt.excluded.updated_at,
-            },
-        )
-    )
-
-    db.commit()
-
-
-def fix_current_status_by_deleted_topic(db: Session, topic_id: Union[UUID, str]):
-    db.query(models.CurrentPTeamTopicTagStatus).filter(
-        models.CurrentPTeamTopicTagStatus.topic_id == str(topic_id)
-    ).delete()
-    db.commit()
-
-
-def fix_current_status_by_topic(db: Session, topic: models.Topic):
-    if topic.disabled:
-        db.query(models.CurrentPTeamTopicTagStatus).filter(
-            models.CurrentPTeamTopicTagStatus.topic_id == topic.topic_id
-        ).delete()
-        db.commit()
-        return
-
-    # remove untagged
-    current_related_tags = (
-        select(models.Tag.tag_id)
-        .join(
-            models.TopicTag,
-            and_(
-                models.TopicTag.topic_id == topic.topic_id,
-                or_(
-                    models.TopicTag.tag_id == models.Tag.tag_id,
-                    models.TopicTag.tag_id == models.Tag.parent_id,
-                ),
-            ),
-        )
-        .distinct()
-    )
-    db.execute(
-        delete(models.CurrentPTeamTopicTagStatus).where(
-            models.CurrentPTeamTopicTagStatus.topic_id == topic.topic_id,
-            models.CurrentPTeamTopicTagStatus.tag_id.not_in(current_related_tags),
-        )
-    )
-
-    # fill missings or update -- at least updated_at is modified
-    pteam_tags = (
-        select(
-            models.Tag.tag_id,
-            models.PTeamTagReference.pteam_id,
-        )
-        .join(
-            models.TopicTag,
-            and_(
-                models.TopicTag.topic_id == topic.topic_id,
-                or_(
-                    models.TopicTag.tag_id == models.Tag.tag_id,
-                    models.TopicTag.tag_id == models.Tag.parent_id,
-                ),
-            ),
-        )
-        .join(
-            models.PTeamTagReference,
-            models.PTeamTagReference.tag_id == models.Tag.tag_id,
-        )
-        .join(
-            models.PTeam,
-            and_(
-                models.PTeam.pteam_id == models.PTeamTagReference.pteam_id,
-                models.PTeam.disabled.is_(False),
-            ),
-        )
-        .distinct()
-        .subquery()
-    )
-    latests = (
-        select(
-            models.PTeamTopicTagStatus.pteam_id,
-            models.PTeamTopicTagStatus.topic_id,
-            models.PTeamTopicTagStatus.tag_id,
-            func.max(models.PTeamTopicTagStatus.created_at).label("latest"),
-        )
-        .where(
-            models.PTeamTopicTagStatus.topic_id == topic.topic_id,
-        )
-        .group_by(
-            models.PTeamTopicTagStatus.pteam_id,
-            models.PTeamTopicTagStatus.topic_id,
-            models.PTeamTopicTagStatus.tag_id,
-        )
-        .subquery()
-    )
-    new_currents = (
-        select(
-            pteam_tags.c.pteam_id,
-            literal_column(f"'{topic.topic_id}'"),
-            pteam_tags.c.tag_id,
-            models.PTeamTopicTagStatus.status_id,
-            func.coalesce(models.PTeamTopicTagStatus.topic_status, models.TopicStatusType.alerted),
-            literal_column(f"'{topic.threat_impact}'"),
-            literal_column(f"'{topic.updated_at}'"),
-        )
-        .outerjoin(
-            latests,
-            and_(
-                latests.c.pteam_id == pteam_tags.c.pteam_id,
-                latests.c.topic_id == topic.topic_id,
-                latests.c.tag_id == pteam_tags.c.tag_id,
-            ),
-        )
-        .outerjoin(
-            models.PTeamTopicTagStatus,
-            and_(
-                models.PTeamTopicTagStatus.pteam_id == latests.c.pteam_id,
-                models.PTeamTopicTagStatus.topic_id == topic.topic_id,
-                models.PTeamTopicTagStatus.tag_id == latests.c.tag_id,
-                models.PTeamTopicTagStatus.created_at == latests.c.latest,
-            ),
-        )
-    )
-    insert_stmt = psql_insert(models.CurrentPTeamTopicTagStatus).from_select(
-        [
-            "pteam_id",
-            "topic_id",
-            "tag_id",
-            "status_id",
-            "topic_status",
-            "threat_impact",
-            "updated_at",
-        ],
-        new_currents,
-    )
-    db.execute(
-        insert_stmt.on_conflict_do_update(
-            index_elements=["pteam_id", "topic_id", "tag_id"],
-            set_={
-                "status_id": insert_stmt.excluded.status_id,
-                "threat_impact": insert_stmt.excluded.threat_impact,
-                "updated_at": insert_stmt.excluded.updated_at,
-            },
-        )
-    )
-
-    db.commit()
 
 
 def calculate_topic_content_fingerprint(

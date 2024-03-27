@@ -17,8 +17,6 @@ from app.common import (
     calculate_topic_content_fingerprint,
     check_pteam_membership,
     check_topic_action_tags_integrity,
-    fix_current_status_by_deleted_topic,
-    fix_current_status_by_topic,
     get_enabled_topics,
     get_or_create_misp_tag,
     get_sorted_topics,
@@ -164,7 +162,6 @@ def search_topics(
 
     return command.search_topics_internal(
         db,
-        current_user,
         offset=offset,
         limit=limit,
         sort_key=sort_key,
@@ -332,7 +329,7 @@ def create_topic(
     persistence.create_topic(db, topic)
 
     auto_close_by_topic(db, topic)
-    fix_current_status_by_topic(db, topic)
+    command.fix_current_status_by_topic(db, topic)
 
     db.commit()
     db.refresh(topic)
@@ -410,7 +407,7 @@ def update_topic(
 
     if need_auto_close:
         auto_close_by_topic(db, topic)
-    fix_current_status_by_topic(db, topic)
+    command.fix_current_status_by_topic(db, topic)
 
     db.commit()
     db.refresh(topic)
@@ -437,7 +434,7 @@ def delete_topic(
         )
 
     persistence.delete_topic(db, topic)
-    fix_current_status_by_deleted_topic(db, topic.topic_id)
+    command.fix_current_status_by_deleted_topic(db, topic.topic_id)
 
     db.commit()
 

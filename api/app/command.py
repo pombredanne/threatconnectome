@@ -2,9 +2,9 @@ from datetime import datetime
 from typing import Dict, Sequence
 from uuid import UUID
 
-from sqlalchemy import Row, nullsfirst, select
+from sqlalchemy import Row, and_, delete, false, func, literal_column, nullsfirst, or_, select, true
+from sqlalchemy.dialects.postgresql import insert as psql_insert
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.expression import and_, false, func, or_, true
 
 from app import models, persistence, schemas
 
@@ -445,6 +445,266 @@ def pteam_topic_tag_status_to_response(
     )
 
 
+def fix_current_status_by_pteam(db: Session, pteam: models.PTeam):
+    if pteam.disabled:
+        db.query(models.CurrentPTeamTopicTagStatus).filter(
+            models.CurrentPTeamTopicTagStatus.pteam_id == pteam.pteam_id
+        ).delete()
+        db.flush()
+        return
+
+    # remove untagged
+    db.execute(
+        delete(models.CurrentPTeamTopicTagStatus).where(
+            models.CurrentPTeamTopicTagStatus.pteam_id == pteam.pteam_id,
+            models.CurrentPTeamTopicTagStatus.tag_id.not_in(
+                select(models.PTeamTagReference.tag_id.distinct()).where(
+                    models.PTeamTagReference.pteam_id == pteam.pteam_id
+                )
+            ),
+        )
+    )
+
+    # insert missings or updated with latest
+    tagged_topics = (
+        db.query(models.TopicTag.topic_id, models.Tag.tag_id)  # tag_id is pteam tag (not topic tag)
+        .join(
+            models.Tag,
+            and_(
+                models.Tag.tag_id.in_(
+                    select(models.PTeamTagReference.tag_id.distinct()).where(
+                        models.PTeamTagReference.pteam_id == pteam.pteam_id
+                    )
+                ),
+                or_(
+                    models.TopicTag.tag_id == models.Tag.tag_id,
+                    models.TopicTag.tag_id == models.Tag.parent_id,
+                ),
+            ),
+        )
+        .join(
+            models.Topic,
+            and_(
+                models.Topic.topic_id == models.TopicTag.topic_id,
+                models.Topic.disabled.is_(False),
+            ),
+        )
+        .distinct()
+        .subquery()
+    )
+    latests = (
+        db.query(
+            models.PTeamTopicTagStatus.pteam_id,
+            models.PTeamTopicTagStatus.topic_id,
+            models.PTeamTopicTagStatus.tag_id,
+            func.max(models.PTeamTopicTagStatus.created_at).label("latest"),
+        )
+        .filter(
+            models.PTeamTopicTagStatus.pteam_id == pteam.pteam_id,
+        )
+        .group_by(
+            models.PTeamTopicTagStatus.pteam_id,
+            models.PTeamTopicTagStatus.topic_id,
+            models.PTeamTopicTagStatus.tag_id,
+        )
+        .subquery()
+    )
+    new_currents = (
+        db.query(
+            literal_column(f"'{pteam.pteam_id}'").label("pteam_id"),
+            tagged_topics.c.topic_id,
+            tagged_topics.c.tag_id,
+            models.PTeamTopicTagStatus.status_id,
+            func.coalesce(models.PTeamTopicTagStatus.topic_status, models.TopicStatusType.alerted),
+            models.Topic.threat_impact,
+            models.Topic.updated_at,
+        )
+        .join(
+            models.Topic,
+            models.Topic.topic_id == tagged_topics.c.topic_id,
+        )
+        .outerjoin(
+            latests,
+            and_(
+                latests.c.pteam_id == pteam.pteam_id,
+                latests.c.topic_id == tagged_topics.c.topic_id,
+                latests.c.tag_id == tagged_topics.c.tag_id,
+            ),
+        )
+        .outerjoin(
+            models.PTeamTopicTagStatus,
+            and_(
+                models.PTeamTopicTagStatus.pteam_id == pteam.pteam_id,
+                models.PTeamTopicTagStatus.topic_id == latests.c.topic_id,
+                models.PTeamTopicTagStatus.tag_id == latests.c.tag_id,
+                models.PTeamTopicTagStatus.created_at == latests.c.latest,  # use as uniq key
+            ),
+        )
+    )
+    insert_stmt = psql_insert(models.CurrentPTeamTopicTagStatus).from_select(
+        [
+            "pteam_id",
+            "topic_id",
+            "tag_id",
+            "status_id",
+            "topic_status",
+            "threat_impact",
+            "updated_at",
+        ],
+        new_currents,
+    )
+    db.execute(
+        insert_stmt.on_conflict_do_update(
+            index_elements=["pteam_id", "topic_id", "tag_id"],
+            set_={
+                "status_id": insert_stmt.excluded.status_id,
+                "threat_impact": insert_stmt.excluded.threat_impact,
+                "updated_at": insert_stmt.excluded.updated_at,
+            },
+        )
+    )
+
+    db.flush()
+
+
+def fix_current_status_by_deleted_topic(db: Session, topic_id: UUID | str):
+    db.query(models.CurrentPTeamTopicTagStatus).filter(
+        models.CurrentPTeamTopicTagStatus.topic_id == str(topic_id)
+    ).delete()
+    db.flush()
+
+
+def fix_current_status_by_topic(db: Session, topic: models.Topic):
+    if topic.disabled:
+        db.query(models.CurrentPTeamTopicTagStatus).filter(
+            models.CurrentPTeamTopicTagStatus.topic_id == topic.topic_id
+        ).delete()
+        db.flush()
+        return
+
+    # remove untagged
+    current_related_tags = (
+        select(models.Tag.tag_id)
+        .join(
+            models.TopicTag,
+            and_(
+                models.TopicTag.topic_id == topic.topic_id,
+                or_(
+                    models.TopicTag.tag_id == models.Tag.tag_id,
+                    models.TopicTag.tag_id == models.Tag.parent_id,
+                ),
+            ),
+        )
+        .distinct()
+    )
+    db.execute(
+        delete(models.CurrentPTeamTopicTagStatus).where(
+            models.CurrentPTeamTopicTagStatus.topic_id == topic.topic_id,
+            models.CurrentPTeamTopicTagStatus.tag_id.not_in(current_related_tags),
+        )
+    )
+
+    # fill missings or update -- at least updated_at is modified
+    pteam_tags = (
+        select(
+            models.Tag.tag_id,
+            models.PTeamTagReference.pteam_id,
+        )
+        .join(
+            models.TopicTag,
+            and_(
+                models.TopicTag.topic_id == topic.topic_id,
+                or_(
+                    models.TopicTag.tag_id == models.Tag.tag_id,
+                    models.TopicTag.tag_id == models.Tag.parent_id,
+                ),
+            ),
+        )
+        .join(
+            models.PTeamTagReference,
+            models.PTeamTagReference.tag_id == models.Tag.tag_id,
+        )
+        .join(
+            models.PTeam,
+            and_(
+                models.PTeam.pteam_id == models.PTeamTagReference.pteam_id,
+                models.PTeam.disabled.is_(False),
+            ),
+        )
+        .distinct()
+        .subquery()
+    )
+    latests = (
+        select(
+            models.PTeamTopicTagStatus.pteam_id,
+            models.PTeamTopicTagStatus.topic_id,
+            models.PTeamTopicTagStatus.tag_id,
+            func.max(models.PTeamTopicTagStatus.created_at).label("latest"),
+        )
+        .where(
+            models.PTeamTopicTagStatus.topic_id == topic.topic_id,
+        )
+        .group_by(
+            models.PTeamTopicTagStatus.pteam_id,
+            models.PTeamTopicTagStatus.topic_id,
+            models.PTeamTopicTagStatus.tag_id,
+        )
+        .subquery()
+    )
+    new_currents = (
+        select(
+            pteam_tags.c.pteam_id,
+            literal_column(f"'{topic.topic_id}'"),
+            pteam_tags.c.tag_id,
+            models.PTeamTopicTagStatus.status_id,
+            func.coalesce(models.PTeamTopicTagStatus.topic_status, models.TopicStatusType.alerted),
+            literal_column(f"'{topic.threat_impact}'"),
+            literal_column(f"'{topic.updated_at}'"),
+        )
+        .outerjoin(
+            latests,
+            and_(
+                latests.c.pteam_id == pteam_tags.c.pteam_id,
+                latests.c.topic_id == topic.topic_id,
+                latests.c.tag_id == pteam_tags.c.tag_id,
+            ),
+        )
+        .outerjoin(
+            models.PTeamTopicTagStatus,
+            and_(
+                models.PTeamTopicTagStatus.pteam_id == latests.c.pteam_id,
+                models.PTeamTopicTagStatus.topic_id == topic.topic_id,
+                models.PTeamTopicTagStatus.tag_id == latests.c.tag_id,
+                models.PTeamTopicTagStatus.created_at == latests.c.latest,
+            ),
+        )
+    )
+    insert_stmt = psql_insert(models.CurrentPTeamTopicTagStatus).from_select(
+        [
+            "pteam_id",
+            "topic_id",
+            "tag_id",
+            "status_id",
+            "topic_status",
+            "threat_impact",
+            "updated_at",
+        ],
+        new_currents,
+    )
+    db.execute(
+        insert_stmt.on_conflict_do_update(
+            index_elements=["pteam_id", "topic_id", "tag_id"],
+            set_={
+                "status_id": insert_stmt.excluded.status_id,
+                "threat_impact": insert_stmt.excluded.threat_impact,
+                "updated_at": insert_stmt.excluded.updated_at,
+            },
+        )
+    )
+
+    db.flush()
+
+
 def get_pteam_reference_versions_of_each_tags(
     db: Session,
     pteam_id: UUID | str,
@@ -518,7 +778,6 @@ def get_auto_close_triable_pteam_topics(
 
 def search_topics_internal(
     db: Session,
-    current_user: models.Account,
     offset: int = 0,
     limit: int = 10,
     sort_key: schemas.TopicSortKey = schemas.TopicSortKey.THREAT_IMPACT,
