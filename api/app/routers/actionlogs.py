@@ -3,7 +3,6 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import command, models, persistence, schemas
@@ -53,7 +52,7 @@ def create_log(
     if not (pteam := persistence.get_pteam_by_id(db, data.pteam_id)) or pteam.disabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No such pteam")
     if not check_pteam_membership(db, pteam, current_user):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Not a pteam member")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a pteam member")
     if not (user := persistence.get_account_by_id(db, data.user_id)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
     if not check_pteam_membership(db, pteam, user):
@@ -110,10 +109,12 @@ def search_logs(
         pteam_ids = [pteam.pteam_id for pteam in current_user.pteams]
     else:
         for pteam_id in pteam_ids:
-            pteam = db.scalars(
-                select(models.PTeam).where(models.PTeam.pteam_id == pteam_id)
-            ).one_or_none()
-            check_pteam_membership(db, pteam, current_user)
+            pteam = persistence.get_pteam_by_id(db, pteam_id)
+            if check_pteam_membership(db, pteam, current_user) is False:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail="Not a pteam member"
+                )
+
     rows = persistence.search_logs(
         db,
         topic_ids,
