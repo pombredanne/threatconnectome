@@ -834,7 +834,7 @@ def set_pteam_topic_status(
                 detail="Not a pteam member",
             )
 
-    return set_pteam_topic_status_internal(db, current_user, pteam, topic_id, tag, data)
+    return set_pteam_topic_status_internal(db, current_user, pteam, topic, tag, data)
 
 
 @router.get(

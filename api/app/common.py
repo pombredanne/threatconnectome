@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 from hashlib import md5
-from typing import Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import List, Optional, Sequence, Set, Tuple, Union
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -268,113 +268,57 @@ def calculate_topic_content_fingerprint(
     return md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 
-def get_pteam_topic_status_history(
-    db: Session,
-    status_id: Optional[Union[UUID, str]] = None,
-    pteam_id: Optional[Union[UUID, str]] = None,
-    topic_id: Optional[Union[UUID, str]] = None,
-    tag_id: Optional[Union[UUID, str]] = None,
-    topic_status: Optional[models.TopicStatusType] = None,
-):
-    rows = (
-        db.query(models.PTeamTopicTagStatus, models.ActionLog)
-        .filter(
-            true() if status_id is None else models.PTeamTopicTagStatus.status_id == str(status_id),
-            true() if pteam_id is None else models.PTeamTopicTagStatus.pteam_id == str(pteam_id),
-            true() if topic_id is None else models.PTeamTopicTagStatus.topic_id == str(topic_id),
-            true() if tag_id is None else models.PTeamTopicTagStatus.tag_id == str(tag_id),
-            (
-                true()
-                if topic_status is None
-                else models.PTeamTopicTagStatus.topic_status == topic_status
-            ),
-        )
-        .outerjoin(
-            models.ActionLog,
-            func.array_position(
-                models.PTeamTopicTagStatus.logging_ids, models.ActionLog.logging_id
-            ).is_not(None),
-        )
-        .all()
-    )
-
-    ret_dict: Dict[str, schemas.TopicStatusResponse] = {}
-    for topictagstatus, actionlog in rows:
-        ret = ret_dict.get(
-            topictagstatus.status_id,
-            schemas.TopicStatusResponse(**topictagstatus.__dict__, action_logs=[]),
-        )
-        if actionlog is not None:
-            ret.action_logs.append(schemas.ActionLogResponse(**actionlog.__dict__))
-        ret_dict[topictagstatus.status_id] = ret
-    for val in ret_dict.values():
-        val.action_logs.sort(key=lambda x: x.executed_at, reverse=True)
-
-    return sorted(ret_dict.values(), key=lambda x: x.created_at, reverse=True)
-
-
 def set_pteam_topic_status_internal(
     db: Session,
-    user: models.Account,
+    current_user: models.Account,
     pteam: models.PTeam,
-    topic_id: Union[UUID, str],
+    topic: models.Topic,
     tag: models.Tag,  # should be PTeamTag, not TopicTag
     data: schemas.TopicStatusRequest,
 ) -> schemas.TopicStatusResponse | None:
     current_status = persistence.get_current_pteam_topic_tag_status(
-        db, pteam.pteam_id, topic_id, tag.tag_id
+        db, pteam.pteam_id, topic.topic_id, tag.tag_id
     )
+    if (
+        (not current_status or current_status.topic_status == models.TopicStatusType.alerted)
+        and data.topic_status == models.TopicStatusType.acknowledged
+        and not data.assignees  # first ack without assignees
+    ):
+        assignees = [current_user.user_id]  # force assign current_user
+    else:
+        assignees = list(map(str, data.assignees))
     new_status = models.PTeamTopicTagStatus(
         pteam_id=pteam.pteam_id,
-        topic_id=str(topic_id),
+        topic_id=topic.topic_id,
         tag_id=tag.tag_id,
         topic_status=data.topic_status,
-        user_id=user.user_id,
+        user_id=current_user.user_id,
         note=data.note,
         logging_ids=list(set(data.logging_ids)),
-        assignees=(
-            [user.user_id]
-            if (
-                (
-                    current_status is None
-                    or current_status.topic_status == models.TopicStatusType.alerted
-                )
-                and data.assignees == []
-                and data.topic_status == models.TopicStatusType.acknowledged
-            )
-            else list(set(data.assignees))
-        ),
+        assignees=list(set(assignees)),
         scheduled_at=data.scheduled_at,
         created_at=datetime.now(),
     )
-    new_status = persistence.create_pteam_topic_tag_status(db, new_status)
+    persistence.create_pteam_topic_tag_status(db, new_status)
 
     if not current_status:
-        current_status = persistence.create_current_pteam_topic_tag_status(
-            db,
-            models.CurrentPTeamTopicTagStatus(
-                pteam_id=pteam.pteam_id,
-                topic_id=str(topic_id),
-                tag_id=tag.tag_id,
-                status_id=None,  # fill later
-                threat_impact=None,  # fill later
-                updated_at=None,  # fill later
-            ),
+        current_status = models.CurrentPTeamTopicTagStatus(
+            pteam_id=pteam.pteam_id,
+            topic_id=topic.topic_id,
+            tag_id=tag.tag_id,
+            status_id=None,  # fill later
+            topic_status=None,  # fill later
+            threat_impact=None,  # fill later
+            updated_at=None,  # fill later
         )
+        persistence.create_current_pteam_topic_tag_status(db, current_status)
+
     current_status.status_id = new_status.status_id
     current_status.topic_status = new_status.topic_status
-
-    # FIXME!  topic should be given by arg
-    topic = db.scalars(
-        select(models.Topic).where(models.Topic.topic_id == str(topic_id))
-    ).one_or_none()
-    assert topic
-
     current_status.threat_impact = topic.threat_impact
     current_status.updated_at = (
         None if new_status.topic_status == models.TopicStatusType.completed else topic.updated_at
     )
-
     db.flush()
 
     return command.pteam_topic_tag_status_to_response(db, new_status)
@@ -437,7 +381,8 @@ def _complete_topic(
 ):
     if not actions:
         return
-    topic_id = actions[0].topic_id
+
+    topic = actions[0].topic
     system_account = persistence.get_system_account(db)
     now = datetime.now()
 
@@ -445,7 +390,7 @@ def _complete_topic(
     for action in actions:
         action_log = models.ActionLog(
             action_id=action.action_id,
-            topic_id=topic_id,
+            topic_id=topic.topic_id,
             action=action.action,
             action_type=action.action_type,
             recommended=action.recommended,
@@ -462,7 +407,7 @@ def _complete_topic(
         db,
         system_account,
         pteam,
-        topic_id,
+        topic,
         tag,
         schemas.TopicStatusRequest(
             topic_status=models.TopicStatusType.completed,
