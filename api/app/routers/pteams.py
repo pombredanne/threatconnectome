@@ -3,7 +3,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
-from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app import command, models, persistence, schemas
@@ -916,12 +915,8 @@ def delete_member(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such pteam member")
 
     # remove all extra authorities  # FIXME: should be deleted on cascade
-    db.execute(
-        delete(models.PTeamAuthority).where(
-            models.PTeamAuthority.pteam_id == str(pteam_id),
-            models.PTeamAuthority.user_id == str(user_id),
-        )
-    )
+    if auth := persistence.get_pteam_authority(db, pteam_id, user_id):
+        command.workaround_delete_pteam_authority(db, auth)
 
     # remove from members
     pteam.members.remove(target_users[0])

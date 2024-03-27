@@ -28,6 +28,19 @@ sortkey2orderby: Dict[schemas.TopicSortKey, list] = {
 }
 
 
+def workaround_delete_team_authes_by_user_id(db: Session, user_id: UUID | str) -> None:
+    # this is workaround until models fixed with delete on cascade
+    db.execute(delete(models.PTeamAuthority).where(models.PTeamAuthority.user_id == str(user_id)))
+    db.execute(delete(models.ATeamAuthority).where(models.ATeamAuthority.user_id == str(user_id)))
+    db.flush()
+
+
+def workaround_delete_pteam_authority(db: Session, auth: models.PTeamAuthority) -> None:
+    # this is workaround until models fixed with delete on cascade
+    db.delete(auth)
+    db.flush()
+
+
 def get_ateam_topic_statuses(
     db: Session, ateam_id: UUID | str, sort_key: schemas.TopicSortKey, search: str | None
 ):

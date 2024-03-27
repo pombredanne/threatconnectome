@@ -4,7 +4,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi import Query as QueryParameter
 from fastapi.responses import Response
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import command, models, persistence, schemas
@@ -22,10 +21,8 @@ def get_tags(
     """
     Get all tags sorted by tagName.
     """
-    # Get scalar value because converting python object is slow
-    # TODO: add pagination
-    select_statement = select(models.Tag).order_by(models.Tag.tag_name)
-    return db.scalars(select_statement).all()
+    tags = persistence.get_all_tags(db)
+    return sorted(tags, key=lambda tag: tag.tag_name)
 
 
 @router.post("", response_model=schemas.TagResponse)

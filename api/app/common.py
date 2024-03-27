@@ -31,25 +31,6 @@ def check_tags_exist(db: Session, tag_names: Sequence[str]):  # FIXME: should ob
         )
 
 
-def validate_pteam(  # FIXME should obsolete
-    db: Session,
-    pteam_id: Union[UUID, str],
-    on_error: Optional[int] = None,
-    ignore_disabled: bool = False,
-) -> Optional[models.PTeam]:
-    pteam = (
-        db.query(models.PTeam)
-        .filter(
-            models.PTeam.pteam_id == str(pteam_id),
-            true() if ignore_disabled else models.PTeam.disabled.is_(False),
-        )
-        .one_or_none()
-    )
-    if pteam is None and on_error is not None:
-        raise HTTPException(status_code=on_error, detail="No such pteam")
-    return pteam
-
-
 def check_pteam_membership(
     db: Session,
     pteam: models.PTeam | None,

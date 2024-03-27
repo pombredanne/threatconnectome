@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
-from app import models, persistence, schemas
+from app import command, models, persistence, schemas
 from app.auth import get_current_user, token_scheme, verify_id_token
 from app.database import get_db
 
@@ -35,9 +35,13 @@ def create_user(
     email = decoded_token["email"]
     if persistence.get_account_by_email(db, email):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already used")
-    user = persistence.create_account(db, models.Account(uid=uid, email=email, **data.model_dump()))
+    account = models.Account(uid=uid, email=email, **data.model_dump())
+    persistence.create_account(db, account)
+
     db.commit()
-    return user
+    db.refresh(account)
+
+    return account
 
 
 @router.put("/{user_id}", response_model=schemas.UserResponse)
@@ -76,13 +80,8 @@ def delete_user(
     Delete current user.
     """
 
-    # delete all related objects
-    db.query(models.PTeamAuthority).filter(
-        models.PTeamAuthority.user_id == current_user.user_id
-    ).delete()
-    db.query(models.ATeamAuthority).filter(
-        models.ATeamAuthority.user_id == current_user.user_id
-    ).delete()
+    # delete all related objects  # FIXME: should deleted on cascade
+    command.workaround_delete_team_authes_by_user_id(db, current_user.user_id)
 
     for log in current_user.action_logs:
         # actoin logs shoud not be deleted, but should be anonymized
