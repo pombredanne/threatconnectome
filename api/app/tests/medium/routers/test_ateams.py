@@ -427,9 +427,8 @@ def test_update_ateam_auth__pseudo_uuid(testdb):
         )
 
 
-def test_update_ateam_auth__remove_admin():
+def test_update_ateam_auth__remove_admin__last():
     user1 = create_user(USER1)
-    user2 = create_user(USER2)
     ateam1 = create_ateam(USER1, ATEAM1)
 
     # remove last admin
@@ -443,16 +442,23 @@ def test_update_ateam_auth__remove_admin():
             )
         )
 
+
+def test_update_ateam_auth__remove_admin__not_last():
+    user1 = create_user(USER1)
+    user2 = create_user(USER2)
+    ateam1 = create_ateam(USER1, ATEAM1)
     # invite another admin
     invitation = invite_to_ateam(USER1, ateam1.ateam_id, authes=[models.ATeamAuthEnum.ADMIN])
     accept_ateam_invitation(USER2, invitation.invitation_id)
 
-    # try again: removing (no more last) admin
+    request = [
+        {"user_id": str(user1.user_id), "authorities": []},
+    ]
+    # removing (no more last) admin
     assert_200(
         client.post(f"/ateams/{ateam1.ateam_id}/authority", headers=headers(USER1), json=request)
     )
-
-    # removing new last admin
+    # removing last admin
     request = [
         {"user_id": str(user2.user_id), "authorities": []},
     ]
@@ -462,6 +468,23 @@ def test_update_ateam_auth__remove_admin():
                 f"/ateams/{ateam1.ateam_id}/authority", headers=headers(USER2), json=request
             )
         )
+
+
+def test_update_ateam_auth__remove_admin__swap():
+    user1 = create_user(USER1)
+    user2 = create_user(USER2)
+    ateam1 = create_ateam(USER1, ATEAM1)
+    # invite another admin
+    invitation = invite_to_ateam(USER1, ateam1.ateam_id, authes=[models.ATeamAuthEnum.ADMIN])
+    accept_ateam_invitation(USER2, invitation.invitation_id)
+
+    request = [
+        {"user_id": str(user1.user_id), "authorities": []},
+    ]
+    #  removing (no more last) admin
+    assert_200(
+        client.post(f"/ateams/{ateam1.ateam_id}/authority", headers=headers(USER1), json=request)
+    )
 
     # swap admin
     request = [
