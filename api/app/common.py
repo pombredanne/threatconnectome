@@ -4,7 +4,7 @@ from hashlib import md5
 from typing import Optional, Sequence, Set, Union
 from uuid import UUID
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import true
 
@@ -15,20 +15,6 @@ from app.version import (
     VulnerableRange,
     gen_version_instance,
 )
-
-
-def check_tags_exist(db: Session, tag_names: Sequence[str]):  # FIXME: should obsolete
-    _existing_tags = (
-        db.query(models.Tag.tag_name).filter(models.Tag.tag_name.in_(tag_names)).all()
-    )  # [('tag1',), ('tag2',), ('tag3',)]
-    existing_tag_names = set(tag_tuple[0] for tag_tuple in _existing_tags)
-    not_existing_tag_names = set(tag_names) - existing_tag_names
-    if len(not_existing_tag_names) >= 1:
-        # TODO: set max length of not_exist_tag_names
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"No such tags: {', '.join(sorted(not_existing_tag_names))}",
-        )
 
 
 def check_pteam_membership(
@@ -153,17 +139,6 @@ def validate_topic(  # FIXME: should be removed
     return topic
 
 
-def validate_action(  # FIXME: should be removed
-    db: Session,
-    action_id: Union[UUID, str],
-    on_error: Optional[int] = None,
-) -> Optional[models.TopicAction]:
-    action = persistence.get_action(db, action_id)
-    if action is None and on_error is not None:
-        raise HTTPException(status_code=on_error, detail="No such topic action")
-    return action
-
-
 def _pick_parent_tag(tag_name: str) -> str | None:
     if len(tag_name.split(":", 2)) == 3:  # supported format
         return tag_name.rsplit(":", 1)[0] + ":"  # trim the right most field
@@ -173,7 +148,6 @@ def _pick_parent_tag(tag_name: str) -> str | None:
 def check_topic_action_tags_integrity(
     topic_tags: Sequence[str] | Sequence[models.Tag],  # tag_name list or topic.tags
     action_tags: Sequence[str] | None,  # action.ext.get("tags")
-    on_error: Optional[int] = None,  # FIXME: on_error should be obsoleted
 ) -> bool:
     if not action_tags:
         return True
@@ -181,12 +155,7 @@ def check_topic_action_tags_integrity(
     topic_tag_strs = {x if isinstance(x, str) else x.tag_name for x in topic_tags}
     for action_tag in action_tags:
         if action_tag not in topic_tag_strs and _pick_parent_tag(action_tag) not in topic_tag_strs:
-            if on_error is None:
-                return False
-            raise HTTPException(
-                status_code=on_error,
-                detail="Action Tag mismatch with Topic Tag",
-            )
+            return False
     return True
 
 

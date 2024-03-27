@@ -9,13 +9,14 @@ from app import models, persistence, schemas
 from app.auth import get_current_user
 from app.common import (
     auto_close_by_topic,
-    check_tags_exist,
     check_topic_action_tags_integrity,
-    validate_action,
 )
 from app.database import get_db
 
 router = APIRouter(prefix="/actions", tags=["actions"])
+
+
+NO_SUCH_ACTION = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such topic action")
 
 
 @router.post("", response_model=schemas.ActionResponse)
@@ -36,9 +37,15 @@ def create_action(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Action id already exists",
         )
-
-    check_tags_exist(db, data.ext.get("tags", []))  # FIXME
-
+    if not_exist_tags := {
+        tag_name
+        for tag_name in data.ext.get("tags", [])
+        if not persistence.get_tag_by_name(db, tag_name)
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"No such tags: {', '.join(sorted(not_exist_tags))}",
+        )
     if not check_topic_action_tags_integrity(topic.tags, data.ext.get("tags")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -76,8 +83,9 @@ def get_action(
     """
     Get a topic action.
     """
-    action = validate_action(db, action_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert action
+    if not (action := persistence.get_action(db, action_id)):
+        raise NO_SUCH_ACTION
+
     return action
 
 
@@ -91,21 +99,27 @@ def update_action(
     """
     Update a topic action.
     """
-    action = validate_action(db, action_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert action
+    if not (action := persistence.get_action(db, action_id)):
+        raise NO_SUCH_ACTION
     if data.ext:
-        check_topic_action_tags_integrity(
-            action.topic.tags,
-            data.ext.get("tags"),
-            on_error=status.HTTP_400_BAD_REQUEST,
-        )
+        if not_exist_tags := {
+            tag_name
+            for tag_name in data.ext.get("tags", [])
+            if not persistence.get_tag_by_name(db, tag_name)
+        }:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"No such tags: {', '.join(sorted(not_exist_tags))}",
+            )
+        if not check_topic_action_tags_integrity(action.topic.tags, data.ext.get("tags")):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Action Tag mismatch with Topic Tag",
+            )
 
     for key, value in data:
         if value is None:
             continue
-        elif key == "ext":
-            check_tags_exist(db, value.get("tags", []))
-            setattr(action, key, value)
         else:
             setattr(action, key, value)
 
@@ -127,14 +141,15 @@ def delete_action(
     """
     Delete a topic action.
     """
-    action = validate_action(db, action_id, on_error=status.HTTP_404_NOT_FOUND)
-    assert action
-    topic = action.topic
+    if not (action := persistence.get_action(db, action_id)):
+        raise NO_SUCH_ACTION
 
+    topic = action.topic
     persistence.delete_action(db, action)
-    db.commit()
 
     # try auto close because deleted action could block closing
     auto_close_by_topic(db, topic)
+
+    db.commit()
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
