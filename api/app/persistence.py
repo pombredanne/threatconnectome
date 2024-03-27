@@ -541,19 +541,6 @@ def get_tag_by_name(db: Session, tag_name: str) -> models.Tag | None:
     return db.scalars(select(models.Tag).where(models.Tag.tag_name == tag_name)).one_or_none()
 
 
-def get_tag_by_tag_id_or_tag_name(
-    db: Session, tag_id: Optional[UUID | str], tag_name: Optional[str]
-) -> models.Tag | None:
-    return (
-        db.query(models.Tag)
-        .filter(
-            true() if tag_id is None else models.Tag.tag_id == str(tag_id),
-            true() if tag_name is None else models.Tag.tag_name == tag_name,
-        )
-        .one_or_none()
-    )
-
-
 def create_tag(db: Session, tag: models.Tag) -> models.Tag:
     db.add(tag)
     db.flush()

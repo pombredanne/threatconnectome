@@ -18,18 +18,6 @@ from app.version import (
 )
 
 
-def validate_tag(  # FIXME  remove after removing from tags.py
-    db: Session,
-    tag_id: Optional[Union[UUID, str]] = None,
-    tag_name: Optional[str] = None,
-    on_error: Optional[int] = None,
-) -> Optional[models.Tag]:
-    row = persistence.get_tag_by_tag_id_or_tag_name(db, tag_id, tag_name)
-    if row is None and on_error is not None:
-        raise HTTPException(status_code=on_error, detail="No such tag")
-    return row
-
-
 def check_tags_exist(db: Session, tag_names: List[str]):
     _existing_tags = (
         db.query(models.Tag.tag_name).filter(models.Tag.tag_name.in_(tag_names)).all()
