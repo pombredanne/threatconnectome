@@ -473,8 +473,9 @@ def list_invitation(
         raise NO_SUCH_ATEAM
     if not check_ateam_auth(db, ateam, current_user, models.ATeamAuthIntFlag.INVITE):
         raise NOT_HAVE_AUTH
+
     persistence.expire_ateam_invitations(db)
-    db.commit()
+    # do not commit within GET method
 
     return [
         {**item.__dict__, "authorities": models.ATeamAuthIntFlag(item.authority).to_enums()}

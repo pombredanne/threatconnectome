@@ -36,7 +36,11 @@ def create_tag(
     """
     if persistence.get_tag_by_name(db, request.tag_name):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Already exists")
-    return get_or_create_topic_tag(db, request.tag_name)
+    tag = get_or_create_topic_tag(db, request.tag_name)
+
+    db.commit()
+
+    return tag
 
 
 @router.get("/search", response_model=List[schemas.TagResponse])

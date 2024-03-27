@@ -33,9 +33,13 @@ def create_misp_tag(
     if persistence.get_misp_tag_by_name(db, request.tag_name):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Already exists")
 
-    misptag = persistence.create_misp_tag(db, models.MispTag(tag_name=request.tag_name))
+    misp_tag = models.MispTag(tag_name=request.tag_name)
+    persistence.create_misp_tag(db, misp_tag)
+
     db.commit()
-    return misptag
+    db.refresh(misp_tag)
+
+    return misp_tag
 
 
 @router.get("/search", response_model=List[schemas.MispTagResponse])

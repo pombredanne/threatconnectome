@@ -833,7 +833,11 @@ def set_pteam_topic_status(
                 detail="Not a pteam member",
             )
 
-    return set_pteam_topic_status_internal(db, current_user, pteam, topic, tag, data)
+    ret = set_pteam_topic_status_internal(db, current_user, pteam, topic, tag, data)
+
+    db.commit()
+
+    return ret
 
 
 @router.get(
@@ -1083,6 +1087,8 @@ def fix_status_mismatch(
     for tag, topic in command.get_auto_close_triable_pteam_tags_and_topics(db, pteam):
         pteamtag_try_auto_close_topic(db, pteam, tag, topic)
 
+    db.commit()
+
     return Response(status_code=status.HTTP_200_OK)
 
 
@@ -1104,5 +1110,7 @@ def fix_status_mismatch_tag(
 
     for topic in command.get_auto_close_triable_pteam_topics(db, pteam, tag):
         pteamtag_try_auto_close_topic(db, pteam, tag, topic)
+
+    db.commit()
 
     return Response(status_code=status.HTTP_200_OK)
