@@ -1,12 +1,10 @@
 import json
 from datetime import datetime
 from hashlib import md5
-from typing import Optional, Sequence, Set, Union
+from typing import Sequence, Set
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.expression import true
 
 from app import command, models, persistence, schemas
 from app.constants import MEMBER_UUID, NOT_MEMBER_UUID, SYSTEM_UUID
@@ -118,25 +116,6 @@ def get_sorted_topics(topics: Sequence[models.Topic]) -> Sequence[models.Topic]:
 
 def get_enabled_topics(topics: Sequence[models.Topic]) -> Sequence[models.Topic]:
     return list(filter(lambda t: t.disabled is False, topics))
-
-
-def validate_topic(  # FIXME: should be removed
-    db: Session,
-    topic_id: Union[UUID, str],
-    on_error: Optional[int] = None,
-    ignore_disabled: bool = False,
-) -> Optional[models.Topic]:
-    topic = (
-        db.query(models.Topic)
-        .filter(
-            models.Topic.topic_id == str(topic_id),
-            true() if ignore_disabled else models.Topic.disabled.is_(False),
-        )
-        .one_or_none()
-    )
-    if topic is None and on_error is not None:
-        raise HTTPException(status_code=on_error, detail="No such topic")
-    return topic
 
 
 def _pick_parent_tag(tag_name: str) -> str | None:

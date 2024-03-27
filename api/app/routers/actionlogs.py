@@ -9,7 +9,6 @@ from app import command, models, persistence, schemas
 from app.auth import get_current_user
 from app.common import (
     check_pteam_membership,
-    validate_topic,
 )
 from app.database import get_db
 from app.models import ActionType
@@ -140,7 +139,9 @@ def get_topic_logs(
     """
     Get actionlogs associated with the specified topic.
     """
-    topic = validate_topic(db, topic_id, on_error=status.HTTP_404_NOT_FOUND)
+    topic = persistence.get_topic_by_id(db, topic_id)
+    if topic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such topic")
     assert topic
     rows = persistence.get_topic_logs(db, topic_id, current_user.user_id)
     return sorted(rows, key=lambda x: x.executed_at, reverse=True)
